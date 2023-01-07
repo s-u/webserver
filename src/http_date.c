@@ -3,15 +3,10 @@
    
    (C)Copyright 2014,21 Simon Urbanek
 
-   License: BSD
+   License: MIT
 */
 
-
-/* -- interface -- */
-
-char *posix2http(double ts); /* Note: returned buffer is static */
-double http2posix(const char *c);
-
+#include "http_date.h"
 
 /* -- implementation -- */
 
