@@ -34,6 +34,7 @@
 
 const char *prefix[8] = { "EMERGENCY", "ALERT", "CRITICAL", "ERROR",
 			  "WARNING", "NOTE", "INFO", "DEBUG" };
+int prefix_len[8] = { 9, 5, 8, 5, 7, 4, 4, 5 };
 
 /* FIXME: now that we support UDP/TCP we could make this work on Windows ... */
 #ifndef WIN32
@@ -181,7 +182,8 @@ void ulog_begin(int level) {
 	     (long) getpid(), (int) getuid(), (int) getgid(),
 	     prefix[level]
 	     );
-    buf_preamble = buf_pos = strlen(buf);
+    buf_pos = strlen(buf);
+    buf_preamble = buf_pos - prefix_len[level] - 2; /* include the prefix */
 }
 
 void ulog_add(const char *format, ...) {
