@@ -75,11 +75,11 @@ void sanitize_path(char *path) {
             }
         }
         if (*src == '/') {
-            if (pos) { /* not a repeated / */
-                *(dst++) = *(src++);
-                pos = 0;
-            } else /* repeated, just ignore */
+            if (dst > path && dst[-1] == '/') /* repeated / - ignore */
                 src++;
+            else
+                *(dst++) = *(src++);
+            pos = 0;
             continue;
         }
         pos++;
