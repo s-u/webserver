@@ -1,20 +1,26 @@
-/* UDP logger
+/* TCP/UDP logger compatible with syslog
 
-   (C)Copyright 2002-2013 Simon Urbanek
+   (C)Copyright 2002-2022 Simon Urbanek
 
    This logger can be used either via simple
 
-   ulog(...)
+   ulog(UL_INFO, ...) or
+   ulog_info(...)
 
    call in the printf format, or the message can be constructed
    incerementally via
 
-   ulog_begin()
+   ulog_begin(UL_INFO)
    ulog_add(...); [ulog_add(...); ...]
    ulog_end()
 
    calls. ulog_end() commences the transfer.
    Internal state, sockets etc. may be cached after the first use.
+
+   The levels (aka severity) are defined in ulog.h and correspond
+   to 0 .. 7 of syslog, typically UL_INFO, UL_DEBUG, UL_WARN and
+   UL_ERROR. See ulog.h for the full list and convenience macros
+   such as ulog_info(), ulog_error(), etc.
 
 */
 
@@ -25,6 +31,9 @@
 #endif
 
 #include "ulog.h"
+
+const char *prefix[8] = { "EMERGENCY", "ALERT", "CRITICAL", "ERROR",
+			  "WARNING", "NOTE", "INFO", "DEBUG" };
 
 /* FIXME: now that we support UDP/TCP we could make this work on Windows ... */
 #ifndef WIN32
@@ -50,6 +59,8 @@
 
 static int   ulog_sock = -1;
 static char *ulog_path;
+
+#ifndef NO_ULOG
 static int   ulog_dcol, ulog_port = 0;
 
 static char hn[512];
@@ -59,7 +70,10 @@ static unsigned int buf_pos;
 #ifdef ULOG_MICROTIME
 static double time0, timeN;
 #endif
-static char *app_name = "unknown";
+#endif
+/* RFC5424 limits app to 48 chars */
+static char app_name[48] = "ulog-unknown";
+static int facility = 3; /* sys daemon */
 
 static char *sstrdup(const char *s, const char *dflt) {
     char *c;
@@ -69,18 +83,35 @@ static char *sstrdup(const char *s, const char *dflt) {
 }
 
 void ulog_set_app_name(const char *name) {
-    app_name = sstrdup(name, "out-of-memory");
+    if (strlen(name) > 47) {
+	memcpy(app_name, name, 47);
+	app_name[47] = 0;
+    } else
+	strcpy(app_name, name);
 }
 
 void ulog_set_path(const char *path) {
     ulog_path = sstrdup(path, 0);
 }
 
+void ulog_set_facility(int fac) {
+    if (fac < 0 || fac > 23)
+	fac = 23;
+    facility = fac;
+}
+
 int ulog_enabled(void) {
     return (ulog_path) ? 1 : 0;
 }
 
-void ulog_begin(void) {    
+void ulog_reset(void) {
+    if (ulog_sock != -1)
+	close(ulog_sock);
+    ulog_sock = -1;
+}
+
+#ifndef NO_ULOG
+void ulog_begin(int level) {
     if (!ulog_path) return;
 
     if (ulog_sock == -1) { /* first-time user */
@@ -115,6 +146,12 @@ void ulog_begin(void) {
 #endif
     }
 
+    /* truncate level to 0..7 */
+    if (level > 7)
+	level = 7;
+    if (level < 0)
+	level = 0;
+
     {
 	struct tm *stm;
 	time_t now = time(0);
@@ -122,6 +159,9 @@ void ulog_begin(void) {
 	strftime (ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", stm);
 #ifdef ULOG_MICROTIME
 	{   /* this is useful for profiling but breaks the syslog standard */
+	    /* FIXME: we could also add sub-second to the "regular"
+	       time above as that is legal, but we would lose the delta and
+	       linear time. */
 	    struct timeval tv;
 	    double t;
 	    gettimeofday(&tv, 0);
@@ -135,10 +175,12 @@ void ulog_begin(void) {
 
     /* FIXME: we could cache user/group/pid and show the former
        in textual form ... */
-    /* This format is compatible with the syslog format (RFC5424)
-       with hard-coded facility (3) and severity (6) */
-    snprintf(buf, sizeof(buf), "<30>1 %s %s %s %ld %d/%d - ", ts,
-	     hn, app_name, (long) getpid(), (int) getuid(), (int) getgid());
+    /* This format is compatible with the syslog format (RFC5424) */
+    snprintf(buf, sizeof(buf), "<%d>1 %s %s %s %ld %d/%d - %s: ",
+	     level + facility * 8, ts, hn, app_name, 
+	     (long) getpid(), (int) getuid(), (int) getgid(),
+	     prefix[level]
+	     );
     buf_pos = strlen(buf);
 }
 
@@ -179,16 +221,10 @@ void ulog_end(void) {
     buf_pos = 0;
 }
 
-void ulog_reset(void) {
-    if (ulog_sock != -1)
-	close(ulog_sock);
-    ulog_sock = -1;
-}
-
-void ulog(const char *format, ...) {
+void ulog(int level, const char *format, ...) {
     va_list(ap);
     va_start(ap, format);
-    ulog_begin();
+    ulog_begin(level);
 #if defined (RSERV_DEBUG) || defined (ULOG_STDERR)
     /* in case ulog_begin did not start a line */
     if (!buf_pos) {
@@ -203,15 +239,18 @@ void ulog(const char *format, ...) {
     }
     va_end(ap);
 }
+#endif
 
 #else
 
 void ulog_set_path(const char *path) { }
 void ulog_set_app_name(const char *name) { }
-void ulog_begin(void) {}
+void ulog_set_facility(int fac) {}
+void ulog_begin(int) {}
 void ulog_add(const char *format, ...) { }
 void ulog_end(void) {}
-void ulog(const char *format, ...) { }
+void ulog(int, const char *format, ...) { }
 void ulog_reset(void) {}
+int  ulog_enabled(void) { return 0; }
 
 #endif
