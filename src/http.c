@@ -1,6 +1,8 @@
 #include "tls.h"
 #include "http.h"
 #include "ulog.h"
+#include "http_date.h"
+
 #ifndef NO_WEBSOCKETS
 #include "websockets.h" /* for connection upgrade */
 #endif
@@ -42,6 +44,10 @@
 #define CONTENT_TYPE      0x0040 /* message has a specific content type set */
 #define CONTENT_FORM_UENC 0x0080 /* message content type is application/x-www-form-urlencoded */
 #define WS_UPGRADE        0x0100 /* upgrade to WebSockets protocol */
+
+/* descriptions to send with 40x status codes, all others will get "Code xxx" instead */
+const char *http_40x[] = { "Bad Request", "Unauthorized", "Payment Required", "Forbidden",
+						   "Not Found", "Method Not Allowed", "Not Acceptable" };
 
 struct buffer {
     struct buffer *next, *prev;
@@ -85,6 +91,7 @@ struct args {
     unsigned int line_pos, body_pos; /* positions in the buffers */
     long content_length;           /* desired content length */
     char part, method;             /* request part, method */
+	char method4[4];               /* first 4 characters of method */
 	int  attr;                     /* connection attributes */
 	double req_date;               /* request date */
 	char *ws_protocol, *ws_version, *ws_key;
@@ -282,15 +289,10 @@ static void web_log(http_request_t *req, http_result_t *res) {
 	ulog_info("HTTP %d\t%s\t%d\t%ld\t%s\t%s", res->code ? res->code : 200, wlbuf, res->payload_type, (long) res->payload_len, req->url, res->err ? res->err : "");
 }
 
-/* -- from date.c -- */
-
-char  *posix2http(double ts); /* Note: returned buffer is static */
-double http2posix(const char *c);
-
 /* process a request by calling the httpd() function in R */
 static void process_request(args_t *c)
 {
-    char *query = 0, *s;
+    char *query = 0, *fragment = 0, *s;
     DBG(ulog_debug("process request for %p\n", (void*) c));
     if (!c || !c->url) return; /* if there is not enough to process, bail out */
 #ifndef NO_WEBSOCKETS
@@ -303,11 +305,17 @@ static void process_request(args_t *c)
 #endif
 
     s = c->url;
-    while (*s && *s != '?') s++; /* find the query part */
-    if (*s) {
+    s = strchr(s, '?'); /* find the query part */
+    if (s) {
 		*(s++) = 0;
 		query = s;
-    }
+    } else s = c->url;
+	s = strchr(s, '#'); /* find the fragment part */
+	if (s) {
+		*(s++) = 0;
+		fragment = s;
+	}
+
     uri_decode(c->url); /* decode the path part */
     {   /* construct "try(httpd(url, query, body, headers), silent=TRUE)" */
 		http_request_t req;
@@ -316,16 +324,19 @@ static void process_request(args_t *c)
 		req.url = c->url;
 		req.body = c->body;
 		req.body_len = c->body_pos;
-		req.query = query ? query : 0;
+		req.query = query;
+		req.fragment = fragment;
 		req.headers = headers ? headers->buf : 0;
 		req.date = c->req_date;
+		memcpy(req.method, c->method4, 3);
+		req.method[3] = 0;
 		c->aux->http_handler(&req, &res);
 		web_log(&req, &res);
 		if (headers) {
 			free(headers);
 			headers = 0;
 		}
-		
+
 		/* the result is expected to have one of the following forms:
 
 		   a) character vector of length 1 => error (possibly from try),
@@ -346,7 +357,7 @@ static void process_request(args_t *c)
 		   
 		   status code: must be an integer if present (default is 200)
 		*/
-		
+
 		if (res.err) {
 			send_http_response(c, " 500 Evaluation error\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n");
 			DBG(ulog_debug("respond with 500 and content: %s\n", s));
@@ -359,14 +370,22 @@ static void process_request(args_t *c)
 		
 		{
 			int code = res.code ? res.code : 200; /* if no code is provided we assume 200 */
-			char buf[64];
+			char buf[64]; /* "HTTP/x.x xxx code_desc[16]\r\nContent-Type: " = 45 */
 			const char *ct = res.content_type ? res.content_type : "text/html";
+			/* FIXME: for PAYLOAD_[TEMP]FILE the requst can still fail if the file cannot
+			   be opened - perhaps defer? */
+			if (code < 0 || code > 999)
+				code = 500;
 			if (code == 200) {
 				send_http_response(c, " 200 OK\r\nContent-Type: ");
 				send_response(c, ct, strlen(ct));
 			} else if (code == 304) { /* not modified - don't need content type */
 				sprintf(buf, "%s 304 Not Modified", HTTP_SIG(c));
 				send_response(c, buf, strlen(buf));
+			} else if (code >= 400 && code <= 406) {
+				sprintf(buf, "%s %d %s\r\nContent-Type: ", HTTP_SIG(c), code, http_40x[code - 400]);
+				send_response(c, buf, strlen(buf));
+				send_response(c, ct, strlen(ct));
 			} else {
 				sprintf(buf, "%s %d Code %d\r\nContent-Type: ", HTTP_SIG(c), code, code);
 				send_response(c, buf, strlen(buf));
@@ -383,7 +402,7 @@ static void process_request(args_t *c)
 				sprintf(buf, "\r\nDate: %s\r\n", posix2http(res.date));
 				send_response(c, buf, strlen(buf));
 			}
-				
+
 			if (res.headers) {
 				int hlen = strlen(res.headers);
 				send_response(c, res.headers, hlen);
@@ -398,11 +417,14 @@ static void process_request(args_t *c)
 					FILE *f = fopen(fn, "rb");
 					long fsz = 0;
 					if (!f) {
+						/* FIXME: we just pretend that 0-length is ok, but it's not! */
+						ulog_warn("attempt to serve '%s', but it cannot be opened", fn);
 						send_response(c, "Content-Length: 0\r\n\r\n", 23);
 						fin_request(c);
 						return;
 					}
 					fseek(f, 0, SEEK_END);
+					/* FIXME: long is only 32-bit on Windows */
 					fsz = ftell(f);
 					fseek(f, 0, SEEK_SET);
 					sprintf(buf, "Content-Length: %ld\r\n\r\n", fsz);
@@ -413,6 +435,8 @@ static void process_request(args_t *c)
 							while (fsz > 0 && !feof(f)) {
 								int rd = (fsz > 32768) ? 32768 : fsz;
 								if (fread(fbuf, 1, rd, f) != rd) {
+									ulog_warn("read error (%s) while reading '%s'",
+											  strerror(errno), fn);
 									free(fbuf);
 									free_res(&res);
 									c->attr |= CONNECTION_CLOSE;
@@ -425,6 +449,7 @@ static void process_request(args_t *c)
 							}
 							free(fbuf);
 						} else { /* allocation error - get out */
+							ulog_error("out of memory when allocating transfer buffer");
 							c->attr |= CONNECTION_CLOSE;
 							free_res(&res);
 							fclose(f);
@@ -601,6 +626,7 @@ static void http_input_iteration(args_t *c) {
 						if (!strncmp(bol, "GET ", 4))  c->method = METHOD_GET;
 						if (!strncmp(bol, "POST ", 5)) c->method = METHOD_POST;
 						if (!strncmp(bol, "HEAD ", 5)) c->method = METHOD_HEAD;
+						memcpy(c->method4, bol, 4);
 						{
 							char *mend = url - 1;
 							/* we generate a header with the method so it can be passed to the handler */
