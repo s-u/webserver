@@ -1,28 +1,61 @@
 #include "chandler.h"
 
 struct content_handler {
-    struct content_handler *next;
+    struct content_handler *next, *prev;
     content_handler_fn_t process_request;
+    void *data;
 };
 
-static content_handler_t *handlers;
+static content_handler_t *handlers, *handlers_tail;
 
-content_handler_t *add_content_handler(content_handler_fn_t fn) {
-    content_handler_t *h = malloc(sizeof(content_handler_t)), *tail;
+content_handler_t *add_content_handler(content_handler_fn_t fn, void *user, content_handler_t *after) {
+    content_handler_t *h = calloc(sizeof(content_handler_t), 1);
     if (!h) return 0;
     h->next = 0;
+    h->prev = handlers_tail;
     h->process_request = fn;
+    h->data = user;
+    if (after) { /* insertion ? */
+	h->prev = after;
+	h->next = after->next;
+	after->next = h;
+	if (h->next)
+	    h->next->prev = h;
+	if (handlers_tail == after)
+	    handlers_tail = h;
+	return h;
+    }
     if (!handlers)
-        return (handlers = h);
-    tail = handlers;
-    while (tail->next) tail = tail->next;
-    return (tail->next = h);
+	return (handlers = handlers_tail = h);
+    handlers_tail->next = h;
+    handlers_tail = h;
+    return h;
 }
 
-content_handler_t *call_content_handlers(http_request_t *req, http_result_t *res, const char *path) {
+void remove_content_handler(content_handler_t *handler) {
+    if (handler) {
+	if (handler->prev) {
+	    handler->prev->next = handler->next;
+	    if (handler->next)
+		handler->next->prev = handler->prev;
+	} else
+	    handler->next->prev = 0;
+
+	/* this could be moved up inside, since no prev means
+	   we must be the root, but just in case ... */
+	if (handlers == handler)
+	    handlers = handler->next;
+	if (handlers_tail == handler)
+	    handlers_tail = handler->prev;
+	free(handler);
+    }
+}
+
+content_handler_t *call_content_handlers(http_request_t *req, http_result_t *res) {
     content_handler_t *h = handlers;
     while (h) {
-        if (h->process_request(req, res, path)) return h;
+        if (h->process_request(req, res, h->data))
+	    return h;
         h = h->next;
     }
     return h;
@@ -34,4 +67,5 @@ void free_content_handlers(void) {
         free(handlers);
         handlers = n;
     }
+    handlers_tail = handlers;
 }

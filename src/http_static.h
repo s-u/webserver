@@ -18,18 +18,16 @@ typedef struct http_static http_static;
 
    returns NULL on error or an object representing that entry on success.
 */
-http_static *http_add_static_entry(const char *prefix, const char *path,
-				   const char *index, int flags);
-
-/* removes and frees the entry, so the pointer may no longer be used */
-void http_rm_static_entry(http_static *st);
+http_static *http_static_entry(const char *prefix, const char *path,
+			       const char *index, int flags);
 
 /* handler to register with the http system to use this facility */
-int http_static_handler(http_request_t *req, http_result_t *res, const char *path);
+int http_static_handler(http_request_t *req, http_result_t *res, void *user);
 
-/* if the target is NULL then only returns the number of entries.
-   max_ent is the number of entries that the buffer can hold.
-   If there are more entries, they are not stored. */
-int http_list_static_entries(http_static **st, int max_ent);
+/* typical use:
+   add_content_handler(http_static_handler,
+                       http_static_entry("/", "./", "/index.html", 0),
+		       NULL);
+*/
 
 #endif
