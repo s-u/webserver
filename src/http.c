@@ -16,13 +16,6 @@
  * in one line, so this should not be too small */
 #define LINE_BUF_SIZE 32768
 
-/* debug output - change the DBG(X) X to enable debugging output */
-#ifdef RSERV_DEBUG
-#define DBG(X) X
-#else
-#define DBG(X) while(0) {}
-#endif
-
 /* --- httpd --- */
 
 #define PART_REQUEST 0
@@ -158,7 +151,7 @@ static buf_t *collect_buffers(struct buffer *buf) {
 
 static void free_args(args_t *c)
 {
-    DBG(ulog_debug("finalizing worker %p\n", (void*) c));
+    DBG(ulog_debug("finalizing worker %p", (void*) c));
     if (c->url) {
 		free(c->url);
 		c->url = NULL;
@@ -293,7 +286,7 @@ static void web_log(http_request_t *req, http_result_t *res) {
 static void process_request(args_t *c)
 {
     char *query = 0, *fragment = 0, *s;
-    DBG(ulog_debug("process request for %p\n", (void*) c));
+    DBG(ulog_debug("process request for %p", (void*) c));
     if (!c || !c->url) return; /* if there is not enough to process, bail out */
 #ifndef NO_WEBSOCKETS
 	if ((c->attr & WS_UPGRADE) && (c->srv->flags & HTTP_WS_UPGRADE)) {
@@ -360,7 +353,7 @@ static void process_request(args_t *c)
 
 		if (res.err) {
 			send_http_response(c, " 500 Evaluation error\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n");
-			DBG(ulog_debug("respond with 500 and content: %s\n", s));
+			DBG(ulog_debug("respond with 500 and content: %s", s));
 			if (c->method != METHOD_HEAD)
 				send_response(c, res.err, strlen(res.err));
 			c->attr |= CONNECTION_CLOSE; /* force close */
@@ -498,10 +491,10 @@ static void http_input_iteration(args_t *c) {
     int n;
 	server_t *srv = c->srv;
 	
-    DBG(ulog_debug("worker_input_handler, data=%p\n", (void*) c));
+    DBG(ulog_debug("worker_input_handler, data=%p", (void*) c));
     if (!c) return;
 	
-    DBG(ulog_debug("input handler for worker %p (sock=%d, part=%d, method=%d, line_pos=%d)\n", (void*) c, (int)c->s, (int)c->part, (int)c->method, (int)c->line_pos));
+    DBG(ulog_debug("input handler for worker %p (sock=%d, part=%d, method=%d, line_pos=%d)", (void*) c, (int)c->s, (int)c->part, (int)c->method, (int)c->line_pos));
 	
     /* FIXME: there is one edge case that is not caught on unix: if
      * recv reads two or more full requests into the line buffer then
@@ -516,7 +509,7 @@ static void http_input_iteration(args_t *c) {
     if (c->part < PART_BODY) {
 		char *s = c->line_buf;
 		n = srv->recv(c, c->line_buf + c->line_pos, LINE_BUF_SIZE - c->line_pos - 1);
-		DBG(ulog_debug("[recv n=%d, line_pos=%d, part=%d]\n", n, c->line_pos, (int)c->part));
+		DBG(ulog_debug("[recv n=%d, line_pos=%d, part=%d]", n, c->line_pos, (int)c->part));
 		if (n < 0) { /* error, scrape this worker */
 			http_close(c);
 			return;
@@ -528,12 +521,12 @@ static void http_input_iteration(args_t *c) {
 		}
 		c->line_pos += n;
 		c->line_buf[c->line_pos] = 0;
-		DBG(ulog_debug("in buffer: {%s}\n", c->line_buf));
+		DBG(ulog_debug("in buffer: {%s}", c->line_buf));
 		while (*s) {
 			/* ok, we have genuine data in the line buffer */
 			if (s[0] == '\n' || (s[0] == '\r' && s[1] == '\n')) { /* single, empty line - end of headers */
 				/* --- check request validity --- */
-				DBG(ulog_debug(" end of request, moving to body\n"));
+				DBG(ulog_debug(" end of request, moving to body"));
 				if (!(c->attr & HTTP_1_0) && !(c->attr & HOST_HEADER)) { /* HTTP/1.1 mandates Host: header */
 					send_http_response(c, " 400 Bad Request (Host: missing)\r\nConnection: close\r\n\r\n");
 					http_close(c);
@@ -611,7 +604,7 @@ static void http_input_iteration(args_t *c) {
 				} else { /* complete line, great! */
 					if (*s == '\r') *(s++) = 0;
 					if (*s == '\n') *(s++) = 0;
-					DBG(ulog_debug("complete line: {%s}\n", bol));
+					DBG(ulog_debug("complete line: {%s}", bol));
 					if (c->part == PART_REQUEST) {
 						/* --- process request line --- */
 						unsigned int rll = strlen(bol); /* request line length */
@@ -651,7 +644,7 @@ static void http_input_iteration(args_t *c) {
 						bol[strlen(bol) - 9] = 0;
 						c->url = strdup(url);
 						c->part = PART_HEADER;
-						DBG(ulog_debug("parsed request, method=%d, URL='%s'\n", (int)c->method, c->url));
+						DBG(ulog_debug("parsed request, method=%d, URL='%s'", (int)c->method, c->url));
 					} else if (c->part == PART_HEADER) {
 						/* --- process headers --- */
 						char *k = bol;
@@ -689,7 +682,7 @@ static void http_input_iteration(args_t *c) {
 						if (*k == ':') {
 							*(k++) = 0;
 							while (*k == ' ' || *k == '\t') k++;
-							DBG(ulog_debug("header '%s' => '%s'\n", bol, k));
+							DBG(ulog_debug("header '%s' => '%s'", bol, k));
 							if (!strcmp(bol, "upgrade") && !strcmp(k, "websocket"))
 								c->attr |= WS_UPGRADE;
 							if (!strcmp(bol, "content-length")) {
@@ -727,7 +720,7 @@ static void http_input_iteration(args_t *c) {
 								if (c->ws_version) free(c->ws_version);
 								c->ws_version = strdup(k);
 							}
-							DBG(ulog_debug(" [attr = %x]\n", c->attr));
+							DBG(ulog_debug(" [attr = %x]", c->attr));
 						}
 					}
 				}
@@ -741,9 +734,9 @@ static void http_input_iteration(args_t *c) {
     }
     if (c->part == PART_BODY && c->body) { /* BODY  - this branch always returns */
 		if (c->body_pos < c->content_length) { /* need to receive more ? */
-			DBG(ulog_debug("BODY: body_pos=%d, content_length=%ld\n", c->body_pos, c->content_length));
+			DBG(ulog_debug("BODY: body_pos=%d, content_length=%ld", c->body_pos, c->content_length));
 			n = srv->recv(c, c->body + c->body_pos, c->content_length - c->body_pos);
-			DBG(ulog_debug("      [recv n=%d - had %u of %lu]\n", n, c->body_pos, c->content_length));
+			DBG(ulog_debug("      [recv n=%d - had %u of %lu]", n, c->body_pos, c->content_length));
 			c->line_pos = 0;
 			if (n < 0) { /* error, scrap this worker */
 				http_close(c);
@@ -868,7 +861,7 @@ server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, ws_
 #endif
 {
 	server_t *srv = create_server(port, 0, 0, flags);
-	DBG(ulog_debug("create_HTTP_server(port = %d, flags=0x%x)\n", port, flags));
+	DBG(ulog_debug("create_HTTP_server(port = %d, flags=0x%x)", port, flags));
 	if (srv) {
 		struct aux_pass *aux = (struct aux_pass*) malloc(sizeof(struct aux_pass));
 		if (!aux) return 0;  /* FIXME: release srv? */

@@ -89,7 +89,7 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 	struct sockaddr_un lusa;
 #endif
     
-	DBG(ulog_debug(" - create_server(port = %d, socket = %s, mode = %d, flags = 0x%x)\n", port, localSocketName ? localSocketName : "<NULL>", localSocketMode, flags));
+	DBG(ulog_debug(" - create_server(port = %d, socket = %s, mode = %d, flags = 0x%x)", port, localSocketName ? localSocketName : "<NULL>", localSocketMode, flags));
 
 #ifdef WIN32
 	{
@@ -260,7 +260,7 @@ int add_server(server_t *srv) {
 	}
 	server[servers++] = srv;
 
-	DBG(ulog_debug("adding server %p (total %d servers)\n", (void*) srv, servers));
+	DBG(ulog_debug("adding server %p (total %d servers)", (void*) srv, servers));
 
 	return 1;
 }
@@ -277,7 +277,7 @@ int rm_server(server_t *srv) {
 	}
 	if (srv->fin) srv->fin(srv);
 
-	DBG(ulog_debug("removing server %p (total %d servers left)\n", (void*) srv, servers));
+	DBG(ulog_debug("removing server %p (total %d servers left)", (void*) srv, servers));
 
 	return 1;
 }
@@ -504,7 +504,7 @@ int prepare_child(args_t *args) {
 		/* close the connection socket - the child has it already */
 		closesocket(args->s);
 		if (lastChild == -1)
-			ulog_warn("WARNING: fork() failed in prepare_child(): %s\n", strerror(forkErrno));
+			ulog_warn("WARNING: fork() failed in prepare_child(): %s", strerror(forkErrno));
 		return lastChild;
     }
 
