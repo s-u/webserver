@@ -1,6 +1,15 @@
 #ifndef ULOG_H__
 #define ULOG_H__
 
+/* debug output - change the DBG(X) X to enable debugging output */
+#ifndef DBG
+#ifdef RSERV_DEBUG
+#define DBG(X) X
+#else
+#define DBG(X) while(0) {}
+#endif
+#endif
+
 /* levels, compatible with syslog */
 #define UL_PANIC 0
 #define UL_ALERT 1
