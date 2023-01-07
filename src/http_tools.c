@@ -27,3 +27,38 @@ const char *get_header(http_request_t *req, const char *name) {
     }
     return 0;
 }
+
+/* removes .. and . segments, control characters in place.
+   non-ASCII characters are retained */
+void sanitize_path(char *path) {
+    char *src = path, *dst = path;
+    int pos = 0;
+    while (*src) {
+        if (!pos) {
+            if (src[0] == '.') {
+                /* .. */
+                if (src[1] == '.' && (!src[2] || src[2] == '/')) {
+                    src += 2;
+                    continue;
+                }
+                /* . (harmless, but we still remove it) */
+                if (!src[1] || src[1] == '/') {
+                    src++;
+                    continue;
+                }
+            }
+        }
+        if (*src == '/') {
+            if (pos) { /* not a repeated / */
+                *(dst++) = *(src++);
+                pos = 0;
+            } else /* repeated, just ignore */
+                src++;
+            continue;
+        }
+        pos++;
+        if (*src >= 32)
+            *(dst++) = *(src++);
+    }
+    *dst = 0;
+}
