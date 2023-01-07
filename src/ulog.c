@@ -66,7 +66,7 @@ static int   ulog_dcol, ulog_port = 0;
 static char hn[512];
 static char buf[4096];
 static char ts[64];
-static unsigned int buf_pos;
+static unsigned int buf_pos, buf_preamble;
 #ifdef ULOG_MICROTIME
 static double time0, timeN;
 #endif
@@ -181,7 +181,7 @@ void ulog_begin(int level) {
 	     (long) getpid(), (int) getuid(), (int) getgid(),
 	     prefix[level]
 	     );
-    buf_pos = strlen(buf);
+    buf_preamble = buf_pos = strlen(buf);
 }
 
 void ulog_add(const char *format, ...) {
@@ -197,7 +197,11 @@ void ulog_add(const char *format, ...) {
 void ulog_end(void) {
 #if defined (RSERV_DEBUG) || defined (ULOG_STDERR)
     buf[buf_pos] = 0;
+#ifdef ULOG_SHORT
+    fprintf(stderr, "ULOG: %s\n", buf + buf_preamble);
+#else
     fprintf(stderr, "ULOG: %s\n", buf);
+#endif
 #endif
     if (ulog_sock != -1) {
 	if (ulog_port) {
@@ -218,7 +222,7 @@ void ulog_end(void) {
 	    sendto(ulog_sock, buf, buf_pos, 0, (struct sockaddr*) &sa, sizeof(sa));
 	}
     }
-    buf_pos = 0;
+    buf_preamble = buf_pos = 0;
 }
 
 void ulog(int level, const char *format, ...) {
