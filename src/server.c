@@ -1,8 +1,17 @@
-#include "rserr.h"
 #include "server.h"
+#include "ulog.h"
+
+#include <string.h>
+#include <stdio.h>
 
 #define SOCK_ERRORS
 #define LISTENQ 32
+
+#ifdef RSERV_DEBUG
+#define DBG(X) X
+#else
+#define DBG(X) while(0) {}
+#endif
 
 #ifndef WIN32
 #include <sys/un.h> /* needed for unix sockets */
@@ -80,9 +89,7 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 	struct sockaddr_un lusa;
 #endif
     
-#ifdef RSERV_DEBUG
-	printf(" - create_server(port = %d, socket = %s, mode = %d, flags = 0x%x)\n", port, localSocketName ? localSocketName : "<NULL>", localSocketMode, flags);
-#endif
+	DBG(ulog_debug(" - create_server(port = %d, socket = %s, mode = %d, flags = 0x%x)\n", port, localSocketName ? localSocketName : "<NULL>", localSocketMode, flags));
 
 #ifdef WIN32
 	{
@@ -94,18 +101,18 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 
 	if (localSocketName) {
 #ifdef WIN32
-		RSEprintf("ERROR: Local sockets are not supported on non-unix systems.\n");
+		ulog_error("Local sockets are not supported on non-unix systems.");
 		return 0;
 #else
 		if ((ss = socket(AF_LOCAL, SOCK_STREAM, 0)) == -1) {
-			RSEprintf("ERROR: cannot create local socket: %s\n", strerror(errno));
+			ulog_error("cannot create local socket: %s", strerror(errno));
 			return 0;
 		}
 
 		memset(&lusa, 0, sizeof(lusa));
 		lusa.sun_family = AF_LOCAL;
 		if (strlen(localSocketName) > sizeof(lusa.sun_path) - 2) {
-			RSEprintf("ERROR: Local socket name is too long for this system.\n");
+			ulog_error("ERROR: Local socket name is too long for this system.");
 			return 0;
 		}
 		strcpy(lusa.sun_path, localSocketName);
@@ -119,13 +126,13 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 #endif
 
 	if (ss == INVALID_SOCKET) {
-		RSEprintf("ERROR: no available socket: %s\n", strerror(errno));
+		ulog_error("no available socket: %s", strerror(errno));
 		return 0;
 	}
 
 	srv = (server_t*) calloc(1, sizeof(server_t));
 	if (!srv) {
-		RSEprintf("ERROR: cannot allocate memory for server structure\n");
+		ulog_error("cannot allocate memory for server structure");
 		return 0;
 	}
 
@@ -140,7 +147,7 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 #ifndef WIN32
 	if (localSocketName) {
 		if (bind(ss, (SA*) &lusa, sizeof(lusa))) {
-			RSEprintf("ERROR: unable to bind to %s: %s\n", lusa.sun_path, strerror(errno));
+			ulog_error("unable to bind to %s: %s", lusa.sun_path, strerror(errno));
 			return 0;
 		}
 		if (localSocketMode)
@@ -154,7 +161,7 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 			ssa6.sin6_port = htons(port);
 			ssa6.sin6_addr = (flags & SRV_LOCAL) ? in6addr_loopback : in6addr_any;
 			if (bind(ss, (struct sockaddr*) &ssa6, sizeof(ssa6))) {
-				RSEprintf("ERROR: unable to bind to IPv6 port %d: %s\n", port, strerror(errno));
+				ulog_error("unable to bind to IPv6 port %d: %s", port, strerror(errno));
 				closesocket(ss);
 				return 0;
 			}
@@ -165,7 +172,7 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 			ssa.sin_port = htons(port);
 			ssa.sin_addr.s_addr = htonl((flags & SRV_LOCAL) ? INADDR_LOOPBACK : INADDR_ANY);
 			if (bind(ss, (struct sockaddr*) &ssa, sizeof(ssa))) {
-				RSEprintf("ERROR: unable to bind to IPv4 port %d: %s\n", port, strerror(errno));
+				ulog_error("unable to bind to IPv4 port %d: %s", port, strerror(errno));
 				closesocket(ss);
 				return 0;
 			}
@@ -177,7 +184,7 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 #endif
     
 	if (listen(ss, LISTENQ)) {
-		RSEprintf("ERROR: listen failed: %s\n", strerror(errno));
+		ulog_error("listen failed: %s", strerror(errno));
 		closesocket(ss);
 		return 0;
 	}
@@ -248,13 +255,12 @@ static server_t *server[MAX_SERVERS];
 int add_server(server_t *srv) {
 	if (!srv) return 0;
 	if (servers >= MAX_SERVERS) {
-		RSEprintf("ERROR: too many servers\n");
+		ulog_error("too many servers");
 		return 0;
 	}
 	server[servers++] = srv;
-#ifdef RSERV_DEBUG
-	printf("INFO: adding server %p (total %d servers)\n", (void*) srv, servers);
-#endif
+
+	DBG(ulog_debug("adding server %p (total %d servers)\n", (void*) srv, servers));
 
 	return 1;
 }
@@ -270,9 +276,9 @@ int rm_server(server_t *srv) {
 		} else i++;
 	}
 	if (srv->fin) srv->fin(srv);
-#ifdef RSERV_DEBUG
-	printf("INFO: removing server %p (total %d servers left)\n", (void*) srv, servers);
-#endif
+
+	DBG(ulog_debug("removing server %p (total %d servers left)\n", (void*) srv, servers));
+
 	return 1;
 }
 
@@ -334,6 +340,7 @@ static void setup_signal_handlers(void) {
 #endif
 }
 
+#ifdef FORKED
 static void restore_signal_handlers(void) {
 	if (old_HUP != sig_not_set) {
 		signal(SIGHUP, old_HUP);
@@ -348,6 +355,7 @@ static void restore_signal_handlers(void) {
 		old_INT = sig_not_set;
 	}
 }
+#endif
 #else
 static void setup_signal_handlers(void) {
 }
@@ -355,6 +363,7 @@ static void restore_signal_handlers(void) {
 }
 #endif
 
+#ifdef FORKED
 static int RS_fork(args_t *arg) {
 #ifndef WIN32
 	return (arg->srv && arg->srv->fork) ? arg->srv->fork(arg) : fork();
@@ -362,6 +371,7 @@ static int RS_fork(args_t *arg) {
 	return -1;
 #endif
 }
+#endif
 
 void serverLoop(void) {
     struct timeval timv;
@@ -414,7 +424,7 @@ void serverLoop(void) {
 #endif
 						sa->s = accept(ss, (SA*)&(sa->sa), &al);
 					if (sa->s == INVALID_SOCKET) {
-						RSEprintf("accept failed: %s", strerror(errno));
+						ulog_error("accept failed: %s", strerror(errno));
 						continue;
 					}
 
@@ -442,9 +452,8 @@ void serverLoop(void) {
 							if (sa->sa.sin_addr.s_addr == inet_addr(*(laddr++)))
 								{ allowed=1; break; }
 						if (allowed) {
-#ifdef RSERV_DEBUG
-							printf("INFO: accepted connection for server %p, calling connected\n", (void*) srv);
-#endif
+							DBG(ulog_debug("accepted connection for server %p, calling connected", (void*) srv));
+
 							srv->connected(sa);
 							succ = 1;
 #ifdef FORKED
@@ -454,15 +463,13 @@ void serverLoop(void) {
 								exit(2);
 #endif
 						} else {
-#ifdef RSERV_DEBUG
-							printf("INFO: peer is not on allowed IP list, closing connection\n");
-#endif
+							/* FIXME: only in debug mode? */
+							DBG(ulog_info("peer is not on allowed IP list, closing connection"));
 							closesocket(sa->s);
 						}
 					} else { /* ---> remote enabled */
-#ifdef RSERV_DEBUG
-						printf("INFO: accepted connection for server %p, calling connected\n", (void*) srv);
-#endif
+						DBG(ulog_info("accepted connection for server %p, calling connected", (void*) srv));
+
 						srv->connected(sa);
 						succ = 1;
 						if (is_child) /* same as above */
@@ -477,7 +484,10 @@ void serverLoop(void) {
 
 #include <time.h>
 
+#ifdef FORKED
 static pid_t lastChild, parentPID;
+#endif
+
 static args_t *self_args;
 
 int prepare_child(args_t *args) {
@@ -494,7 +504,7 @@ int prepare_child(args_t *args) {
 		/* close the connection socket - the child has it already */
 		closesocket(args->s);
 		if (lastChild == -1)
-			RSEprintf("WARNING: fork() failed in prepare_child(): %s\n",strerror(forkErrno));
+			ulog_warn("WARNING: fork() failed in prepare_child(): %s\n", strerror(forkErrno));
 		return lastChild;
     }
 
