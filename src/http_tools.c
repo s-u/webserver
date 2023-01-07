@@ -2,6 +2,32 @@
 
 #include <string.h>
 
+/* infer content type based on file name.
+   The result is a static constant string. */
+const char *infer_content_type(const char *fn) {
+    const char *x = fn ? strrchr(fn, '.') : 0;
+        char ext[8]; /* lower-case version of the extension */
+        int i = 0;
+    if (!x) return "application/octet-stream";
+        x++;
+        while (i < 7 && *x) {
+                ext[i++] = (*x >= 'A' && *x <= 'Z') ? (*x | 0x20) : *x;
+                x++;
+        }
+        ext[i] = 0;
+
+    if (!strcmp(ext, "svg")) return "image/svg+xml";
+    if (!strcmp(ext, "js"))  return "application/javascript";
+    if (!strcmp(ext, "css")) return "text/css";
+    if (!strcmp(ext, "html")) return "text/html";
+    if (!strcmp(ext, "txt")) return "text/plain";
+    if (!strcmp(ext, "png")) return "image/png";
+    if (!strcmp(ext, "jpeg") || !strcmp(ext, "jpg")) return "image/jpeg";
+    if (!strcmp(ext, "md")) return "text/markdown";
+        if (!strcmp(ext, "json")) return "application/json";
+    return "application/octet-stream";
+}
+
 /* returns a pointer to the beginning of a value for a given header
    field or NULL if not present. */
 const char *get_header(http_request_t *req, const char *name) {
