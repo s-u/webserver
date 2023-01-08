@@ -39,6 +39,8 @@ typedef struct {
 
 typedef void (*http_handler_fn_t)(http_request_t *req, http_result_t *res);
 
+int http_request_set_url(http_request_t *req, const char *path, const char *query, const char *fragment);
+
 /* flags */
 #define HTTP_WS_UPGRADE 0x10 /* allow WebSockets UPGRADE */
 /* Note: the following was used in Rserve, but has no effect here */

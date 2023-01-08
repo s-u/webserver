@@ -329,6 +329,9 @@ static void process_request(args_t *c)
 			free(headers);
 			headers = 0;
 		}
+		/* check if the request took ownership via http_request_set_url() */
+		if (req.url != c->url)
+			c->url = req.url;
 
 		/* the result is expected to have one of the following forms:
 
@@ -852,6 +855,45 @@ static void HTTP_connected(void *parg) {
 		http_input_iteration(arg);
 
 	free_args(arg);
+}
+
+/* --- client API --- */
+
+/* this function MUST be used if any manipulation of the path/query/fragment parts
+   of the request is required, because those are NOT allocated but instead pointers
+   into the original received string for efficiency. */
+int http_request_set_url(http_request_t *req, const char *path, const char *query, const char *fragment) {
+	size_t len, path_len, query_len, fragment_len;
+	char *new_path, *c, *new_query = 0, *new_fragment = 0;
+	if (!path)
+		path = "";
+	len =
+		(path_len     = strlen(path)) +
+		(query_len    = (query ? strlen(query) : 0)) +
+		(fragment_len = (fragment ? strlen(fragment) : 0)) + 3;
+	c = new_path = (char*) malloc(len);
+	if (!new_path)
+		return -1;
+	/* NOTE: we cannot free url until we have copied everything, because
+	   it is legal to pass previous components */
+	memcpy(c, path, path_len + 1);
+	c += path_len + 1;
+	if (query) {
+		new_query = c;
+		memcpy(c, query, query_len + 1);
+		c += query_len + 1;
+	}
+	if (fragment) {
+		new_fragment = c;
+		memcpy(c, fragment, fragment_len + 1);
+	}
+	/* now we can free the original */
+	if (req->url)
+		free(req->url);
+	req->url = new_path;
+	req->query = new_query;
+	req->fragment = new_fragment;
+	return 0;
 }
 
 #ifdef NO_WEBSOCKETS
