@@ -3,6 +3,9 @@
 
 #include "http.h"
 
+/* request this rule to be the last rewrite rule if matched */
+#define REWRITE_FLAG_LAST 1
+
 typedef struct http_rewrite http_rewrite;
 
 http_rewrite *http_rewrite_entry(const char *prefix, const char *replace, int flags);
