@@ -7,6 +7,13 @@
 #include "websockets.h"
 #endif
 
+/* bit-wise processing flags set by handlers that want to pass information
+   to subsequent handlers. Those flags are not used by http.c itself,
+   but handlers can communicate state to each other this way.
+*/
+#define PF_REWRITE_STOP  1 /* rewrite rule is reqeusting no more rewrites */
+#define PF_AUTHORIZED    2 /* authorization handler succeeded */
+
 /* URL: <scheme>:[//<authority>]<path>[?<query>][#<fragment>] */
 typedef struct {
     char  *url;      /* path */
@@ -15,8 +22,10 @@ typedef struct {
     char  *query;
     char  *fragment;
     char  *headers;
+    char  *auth;
     double date;
-    char  method[4]; /* first 3 characters of the method + NUL (e.g. "HEA" for HEAD)*/
+    char   method[8]; /* first 7 characters of the method */
+    int    processing_flags;
 } http_request_t;
 
 #define PAYLOAD_VERBATIM 0 /* payload points to the bytes to send */

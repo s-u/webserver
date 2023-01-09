@@ -84,10 +84,11 @@ struct args {
     unsigned int line_pos, body_pos; /* positions in the buffers */
     long content_length;           /* desired content length */
     char part, method;             /* request part, method */
-	char method4[4];               /* first 4 characters of method */
+	char method8[8];               /* first 7 characters of method */
 	int  attr;                     /* connection attributes */
 	double req_date;               /* request date */
 	char *ws_protocol, *ws_version, *ws_key;
+	char *auth;                    /* authorization header (if set) */
     struct buffer *headers;        /* buffer holding header lines */
 	struct aux_pass *aux;
 };
@@ -164,7 +165,10 @@ static void free_args(args_t *c)
 		free(c->body);
 		c->body = NULL;
     }
-	
+    if (c->auth) {
+		free(c->auth);
+		c->auth = NULL;
+    }
     if (c->content_type) {
 		free(c->content_type);
 		c->content_type = NULL;
@@ -321,8 +325,9 @@ static void process_request(args_t *c)
 		req.fragment = fragment;
 		req.headers = headers ? headers->buf : 0;
 		req.date = c->req_date;
-		memcpy(req.method, c->method4, 3);
-		req.method[3] = 0;
+		memcpy(req.method, c->method8, 7);
+		req.method[7] = 0;
+		req.processing_flags = 0;
 		c->aux->http_handler(&req, &res);
 		web_log(&req, &res);
 		if (headers) {
@@ -568,6 +573,7 @@ static void http_input_iteration(args_t *c) {
 					if (c->url) { free(c->url); c->url = NULL; }
 					if (c->body) { free(c->body); c->body = NULL; }
 					if (c->content_type) { free(c->content_type); c->content_type = NULL; }
+					if (c->auth) { free(c->auth); c->auth = NULL; }
 					if (c->headers) { free_buffer(c->headers); c->headers = NULL; }
 					if (c->ws_key) { free(c->ws_key); c->ws_key = NULL; }
 					if (c->ws_protocol) { free(c->ws_protocol); c->ws_protocol = NULL; }
@@ -619,10 +625,21 @@ static void http_input_iteration(args_t *c) {
 						}
 						url++;
 						if (!strncmp(bol + rll - 3, "1.0", 3)) c->attr |= HTTP_1_0;
-						if (!strncmp(bol, "GET ", 4))  c->method = METHOD_GET;
-						if (!strncmp(bol, "POST ", 5)) c->method = METHOD_POST;
-						if (!strncmp(bol, "HEAD ", 5)) c->method = METHOD_HEAD;
-						memcpy(c->method4, bol, 4);
+						if (!strncmp(bol, "GET ", 4))  {
+							c->method = METHOD_GET;
+							strcpy(c->method8, "GET");
+						} else if (!strncmp(bol, "POST ", 5)) {
+							c->method = METHOD_POST;
+							strcpy(c->method8, "POST");
+						} else if (!strncmp(bol, "HEAD ", 5)) {
+							c->method = METHOD_HEAD;
+							strcpy(c->method8, "HEAD");
+						} else { /* copy method (up to 7 chars) for custom methods*/
+							char *m = c->method8, *me = m + 7, *src = bol;
+							while (m < me && (*src && *src != ' '))
+								*(m++) = *(src++);
+							*m = 0;
+						}
 						{
 							char *mend = url - 1;
 							/* we generate a header with the method so it can be passed to the handler */
@@ -703,6 +720,11 @@ static void http_input_iteration(args_t *c) {
 							}
 							if (!strcmp(bol, "host"))
 								c->attr |= HOST_HEADER;
+							if (!strcmp(bol, "authorization")) {
+								if (c->auth)
+									free(c->auth);
+								c->auth = strdup(k);
+							}
 							if (!strcmp(bol, "date"))
 								c->req_date = http2posix(k);
 							if (!strcmp(bol, "connection")) {
@@ -762,6 +784,7 @@ static void http_input_iteration(args_t *c) {
 			if (c->url) { free(c->url); c->url = NULL; }
 			if (c->body) { free(c->body); c->body = NULL; }
 			if (c->content_type) { free(c->content_type); c->content_type = NULL; }
+			if (c->auth) { free(c->auth); c->auth = NULL; }
 			if (c->headers) { free_buffer(c->headers); c->headers = NULL; }
 			if (c->ws_key) { free(c->ws_key); c->ws_key = NULL; }
 			if (c->ws_protocol) { free(c->ws_protocol); c->ws_protocol = NULL; }
@@ -802,6 +825,7 @@ static void http_input_iteration(args_t *c) {
 				if (c->url) { free(c->url); c->url = NULL; }
 				if (c->body) { free(c->body); c->body = NULL; }
 				if (c->content_type) { free(c->content_type); c->content_type = NULL; }
+				if (c->auth) { free(c->auth); c->auth = NULL; }
 				if (c->headers) { free_buffer(c->headers); c->headers = NULL; }
 				if (c->ws_key) { free(c->ws_key); c->ws_key = NULL; }
 				if (c->ws_protocol) { free(c->ws_protocol); c->ws_protocol = NULL; }
