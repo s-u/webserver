@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "dalloc.h"
+
 #define SOCK_ERRORS
 #define LISTENQ 32
 
@@ -194,11 +196,14 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 	return srv;
 }
 
-void server_fin(void *x) {
-	server_t *srv = (server_t*) x;
+void server_fin(void *ptr) {
+	server_t *srv = (server_t*) ptr;
 	if (srv) {
-		closesocket(srv->ss);
-		if (srv->ss != -1) rm_active_srv_socket(srv->ss);
+		if (srv->ss != -1) {
+			closesocket(srv->ss);
+			rm_active_srv_socket(srv->ss);
+			srv->ss = -1;
+		}
 	}
 }
 
@@ -275,7 +280,8 @@ int rm_server(server_t *srv) {
 			servers--;
 		} else i++;
 	}
-	if (srv->fin) srv->fin(srv);
+	if (srv->fin)
+		srv->fin(srv);
 
 	DBG(ulog_debug("removing server %p (total %d servers left)", (void*) srv, servers));
 
@@ -324,20 +330,16 @@ typedef void (*sig_fn_t)(int);
    to define our own value for "not set" */
 static void sig_not_set(int x) {}
 
-#ifdef FORKED
 static void sigHandler(int i) {
 	active = 0;
 }
-#endif
 
 sig_fn_t old_HUP = sig_not_set, old_TERM = sig_not_set, old_INT = sig_not_set;
 
 static void setup_signal_handlers(void) {
-#ifdef FORKED
 	if (old_HUP == sig_not_set)  old_HUP  = signal(SIGHUP,  sigHandler);
 	if (old_TERM == sig_not_set) old_TERM = signal(SIGTERM, sigHandler);
 	if (old_INT == sig_not_set)  old_INT  = signal(SIGINT,  sigHandler);
-#endif
 }
 
 #ifdef FORKED
@@ -378,6 +380,8 @@ void serverLoop(void) {
     int selRet = 0;
     fd_set readfds;
 
+	begin_pool("serverLoop");
+
 	setup_signal_handlers();
 
     while(active && servers) { /* main serving loop */
@@ -406,15 +410,13 @@ void serverLoop(void) {
 		if (selRet > 0) {
 			for (i = 0; i < servers; i++) {
 				socklen_t al;
-				struct args *sa;
 				server_t *srv = server[i];
 				int ss = srv->ss;
 				int succ = 0;
 				if (server[i] && FD_ISSET(ss, &readfds)) {
 					/* we may not know the size of args since servers may
 					   choose to add fileds, so allocate 1k which is safe */
-					sa = (struct args*)malloc(1024);
-					memset(sa, 0, 1024);
+					struct args *sa = (struct args*)calloc(1024, 1);
 					al = sizeof(sa->sa);
 #ifndef WIN32
 					if (server[i]->unix_socket) {
@@ -425,6 +427,7 @@ void serverLoop(void) {
 						sa->s = accept(ss, (SA*)&(sa->sa), &al);
 					if (sa->s == INVALID_SOCKET) {
 						ulog_error("accept failed: %s", strerror(errno));
+						free(sa);
 						continue;
 					}
 
@@ -475,11 +478,16 @@ void serverLoop(void) {
 						if (is_child) /* same as above */
 							exit(2);
 					}
-					if (!succ) free(sa);
+					/* connected assumes ownership (in case it is asynchronous)
+					   so it is expected to free the args - hence free only if
+					   it was not called */
+					if (!succ)
+						free(sa);
 				} /* ready server */
 			} /* severs loop */
 		} /* select */
     } /* end while(active) */
+	end_pool();
 }
 
 #include <time.h>

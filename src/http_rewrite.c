@@ -21,6 +21,17 @@ typedef struct http_rewrite {
     const char *pos[1];
 } http_rewrite;
 
+void http_rewrite_free(http_rewrite *hr) {
+    if (!hr)
+	return;
+    if (hr->prefix)
+	free(hr->prefix);
+    if (hr->replace)
+	free(hr->replace);
+    /* query is a pointer into replace */
+    free(hr);
+}
+
 http_rewrite *http_rewrite_entry(const char *prefix, const char *replace, int flags) {
     http_rewrite *hs;
     int n = 0;
@@ -55,6 +66,7 @@ http_rewrite *http_rewrite_entry(const char *prefix, const char *replace, int fl
     /* cached for performance */
     hs->prefix_len = strlen(prefix);
     hs->replace_len = strlen(replace);
+
     return hs;
 }
 
@@ -105,11 +117,15 @@ int http_rewrite_handler(http_request_t *req, http_result_t *res, void *user) {
     path = req->url;
     DBG(ulog_debug("rewrite: match '%s' and '%s'", path, r->prefix));
 
+    begin_pool("http_rewrite_handler");
+
     int match_length, replace_length;
 
     if (!r->placeholders) { /* fixed rewrite - simple case */
-	if (strncmp(r->prefix, path, r->prefix_len))
+	if (strncmp(r->prefix, path, r->prefix_len)) {
+	    end_pool();
 	    return 0;
+	}
 	DBG(ulog_debug(" - matched, fixed rewrite"));
 
 	match_length = r->prefix_len;
@@ -127,11 +143,15 @@ int http_rewrite_handler(http_request_t *req, http_result_t *res, void *user) {
 		/* we counted ? so this will not overflow */
 		n++;
 		continue;
-	    } else if (*(src++) != *(rule++))
+	    } else if (*(src++) != *(rule++)) {
+		end_pool();
 		return 0; /* mismatch */
+	    }
 	}
-	if (*rule) /* rule was longer = not a match */
+	if (*rule) { /* rule was longer = not a match */
+	    end_pool();
 	    return 0;
+	}
 	/* no large integers, so safe to use int */
 	match_length = (int) (src - path);
 
@@ -150,6 +170,7 @@ int http_rewrite_handler(http_request_t *req, http_result_t *res, void *user) {
     new_path = dst = malloc(replace_length + al + 1);
     if (!dst) {
 	res->code = 500;
+	end_pool();
 	return 1;
     }
 
@@ -186,6 +207,6 @@ int http_rewrite_handler(http_request_t *req, http_result_t *res, void *user) {
     if (r->flags & REWRITE_FLAG_LAST)
 	req->processing_flags |= PF_REWRITE_STOP;
 	/* we cannot signal 1 since that would stop actual serving handlers */
-	return 0;
+    end_pool();
     return 0;
 }

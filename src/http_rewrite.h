@@ -9,6 +9,7 @@
 typedef struct http_rewrite http_rewrite;
 
 http_rewrite *http_rewrite_entry(const char *prefix, const char *replace, int flags);
+void http_rewrite_free(http_rewrite *hr);
 int http_rewrite_handler(http_request_t *req, http_result_t *res, void *user);
 
 #endif

@@ -301,6 +301,8 @@ static void process_request(args_t *c)
 	}
 #endif
 
+	begin_pool("http.process_request");
+
     s = c->url;
     s = strchr(s, '?'); /* find the query part */
     if (s) {
@@ -366,6 +368,7 @@ static void process_request(args_t *c)
 				send_response(c, res.err, strlen(res.err));
 			c->attr |= CONNECTION_CLOSE; /* force close */
 			free_res(&res);
+			end_pool();
 			return;
 		}
 		
@@ -422,6 +425,7 @@ static void process_request(args_t *c)
 						ulog_warn("attempt to serve '%s', but it cannot be opened", fn);
 						send_response(c, "Content-Length: 0\r\n\r\n", 23);
 						fin_request(c);
+						end_pool();
 						return;
 					}
 					fseek(f, 0, SEEK_END);
@@ -443,6 +447,7 @@ static void process_request(args_t *c)
 									c->attr |= CONNECTION_CLOSE;
 									fclose(f);
 									if (res.payload_type == PAYLOAD_TEMPFILE) unlink(fn);
+									end_pool();
 									return;
 								}
 								send_response(c, fbuf, rd);
@@ -455,6 +460,7 @@ static void process_request(args_t *c)
 							free_res(&res);
 							fclose(f);
 							if (res.payload_type == PAYLOAD_TEMPFILE) unlink(fn);
+							end_pool();
 							return;
 						}
 					}
@@ -462,12 +468,14 @@ static void process_request(args_t *c)
 					free_res(&res);
 					if (res.payload_type == PAYLOAD_TEMPFILE) unlink(fn);
 					fin_request(c);
+					end_pool();
 					return;
 				}
 				sprintf(buf, "Content-Length: 0\r\n\r\n");
 				send_response(c, buf, strlen(buf));
 				free_res(&res);
 				fin_request(c);
+				end_pool();
 				return;
 			} else { /* verbatim payload */
 				if (res.code == 304) /* 304 may NOT send any body and thus no content-length */
@@ -480,12 +488,14 @@ static void process_request(args_t *c)
 				}
 				free_res(&res);
 				fin_request(c);
+				end_pool();
 				return;
 			}
 		}
     }
     send_http_response(c, " 500 Invalid response from handler.\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nServer error: invalid response from handler.\r\n");
     c->attr |= CONNECTION_CLOSE; /* force close */
+	end_pool();
 }
 
 static void http_close(args_t *arg) {
@@ -501,9 +511,11 @@ static void http_input_iteration(args_t *c) {
 	
     DBG(ulog_debug("worker_input_handler, data=%p", (void*) c));
     if (!c) return;
-	
+
     DBG(ulog_debug("input handler for worker %p (sock=%d, part=%d, method=%d, line_pos=%d)", (void*) c, (int)c->s, (int)c->part, (int)c->method, (int)c->line_pos));
-	
+
+	begin_pool("http_input_iteration");
+
     /* FIXME: there is one edge case that is not caught on unix: if
      * recv reads two or more full requests into the line buffer then
      * this function exits after the first one, but input handlers may
@@ -520,11 +532,13 @@ static void http_input_iteration(args_t *c) {
 		DBG(ulog_debug("[recv n=%d, line_pos=%d, part=%d]", n, c->line_pos, (int)c->part));
 		if (n < 0) { /* error, scrape this worker */
 			http_close(c);
+			end_pool();
 			return;
 		}
 		if (n == 0) { /* connection closed -> try to process and then remove */
 			process_request(c);
 			http_close(c);
+			end_pool();
 			return;
 		}
 		c->line_pos += n;
@@ -538,6 +552,7 @@ static void http_input_iteration(args_t *c) {
 				if (!(c->attr & HTTP_1_0) && !(c->attr & HOST_HEADER)) { /* HTTP/1.1 mandates Host: header */
 					send_http_response(c, " 400 Bad Request (Host: missing)\r\nConnection: close\r\n\r\n");
 					http_close(c);
+					end_pool();
 					return;
 				}
 				if (c->attr & CONTENT_LENGTH && c->content_length) {
@@ -546,6 +561,7 @@ static void http_input_iteration(args_t *c) {
 						!(c->body = (char*) malloc(c->content_length + 1 /* allocate an extra termination byte */ ))) {
 						send_http_response(c, " 413 Request Entity Too Large (request body too big)\r\nConnection: close\r\n\r\n");
 						http_close(c);
+						end_pool();
 						return;
 					}
 				}
@@ -562,11 +578,13 @@ static void http_input_iteration(args_t *c) {
 					if ((c->attr & CONTENT_LENGTH) && c->content_length > 0) {
 						send_http_response(c, " 400 Bad Request (GET/HEAD with body)\r\n\r\n");
 						http_close(c);
+						end_pool();
 						return;
 					}
 					process_request(c);
 					if (c->attr & CONNECTION_CLOSE) {
 						http_close(c);
+						end_pool();
 						return;
 					}
 					/* keep-alive - reset the worker so it can process a new request */
@@ -583,6 +601,7 @@ static void http_input_iteration(args_t *c) {
 					c->part = PART_REQUEST;
 					c->attr = 0;
 					c->content_length = 0;
+					end_pool();
 					return;
 				}
 				/* copy body content (as far as available) */
@@ -599,16 +618,20 @@ static void http_input_iteration(args_t *c) {
 				while (*s && *s != '\r' && *s != '\n') s++;
 				if (!*s) { /* incomplete line */
 					if (bol == c->line_buf) {
-						if (c->line_pos < LINE_BUF_SIZE) /* one, incomplete line, but the buffer is not full yet, just return */
+						if (c->line_pos < LINE_BUF_SIZE) { /* one, incomplete line, but the buffer is not full yet, just return */
+							end_pool();
 							return;
+						}
 						/* the buffer is full yet the line is incomplete - we're in trouble */
 						send_http_response(c, " 413 Request entity too large\r\nConnection: close\r\n\r\n");
 						http_close(c);
+						end_pool();
 						return;
 					}
 					/* move the line to the begining of the buffer for later requests */
 					c->line_pos -= bol - c->line_buf;
 					memmove(c->line_buf, bol, c->line_pos);
+					end_pool();
 					return;
 				} else { /* complete line, great! */
 					if (*s == '\r') *(s++) = 0;
@@ -621,6 +644,7 @@ static void http_input_iteration(args_t *c) {
 						if (!url || rll < 14 || strncmp(bol + rll - 9, " HTTP/1.", 8)) { /* each request must have at least 14 characters [GET / HTTP/1.0] and have HTTP/1.x */
 							send_response(c, "HTTP/1.0 400 Bad Request\r\n\r\n", 28);
 							http_close(c);
+							end_pool();
 							return;
 						}
 						url++;
@@ -659,6 +683,7 @@ static void http_input_iteration(args_t *c) {
 						if (!c->method) {
 							send_http_response(c, " 501 Invalid or unimplemented method\r\n\r\n");
 							http_close(c);
+							end_pool();
 							return;
 						}
 						bol[strlen(bol) - 9] = 0;
@@ -754,6 +779,7 @@ static void http_input_iteration(args_t *c) {
 		if (c->part < PART_BODY) {
 			/* we end here if we processed a buffer of exactly one line */
 			c->line_pos = 0;
+			end_pool();
 			return;
 		}
     }
@@ -765,11 +791,13 @@ static void http_input_iteration(args_t *c) {
 			c->line_pos = 0;
 			if (n < 0) { /* error, scrap this worker */
 				http_close(c);
+				end_pool();
 				return;
 			}
 			if (n == 0) { /* connection closed -> try to process and then remove */
 				process_request(c);
 				http_close(c);
+				end_pool();
 				return;
 			}
 			c->body_pos += n;
@@ -778,6 +806,7 @@ static void http_input_iteration(args_t *c) {
 			process_request(c);
 			if (c->attr & CONNECTION_CLOSE || c->line_pos) { /* we have to close the connection if there was a double-hit */
 				http_close(c);
+				end_pool();
 				return;
 			}
 			/* keep-alive - reset the worker so it can process a new request */
@@ -794,6 +823,7 @@ static void http_input_iteration(args_t *c) {
 			c->part = PART_REQUEST;
 			c->attr = 0;
 			c->content_length = 0;
+			end_pool();
 			return;
 		}
     }
@@ -805,12 +835,14 @@ static void http_input_iteration(args_t *c) {
 			if ((s[0] != '\r' || s[1] != '\n') && (s[0] != '\n')) {
 				send_http_response(c, " 411 length is required for non-empty body\r\nConnection: close\r\n\r\n");
 				http_close(c);
+				end_pool();
 				return;
 			}
 			/* empty body, good */
 			process_request(c);
 			if (c->attr & CONNECTION_CLOSE) {
 				http_close(c);
+				end_pool();
 				return;
 			} else { /* keep-alive */
 				int sh = 1;
@@ -835,27 +867,33 @@ static void http_input_iteration(args_t *c) {
 				c->part = PART_REQUEST;
 				c->attr = 0;
 				c->content_length = 0;
+				end_pool();
 				return;
 			}
 		}
 		n = srv->recv(c, c->line_buf + c->line_pos, LINE_BUF_SIZE - c->line_pos - 1);
 		if (n < 0) { /* error, scrap this worker */
 			http_close(c);
+			end_pool();
 			return;
 		}
 		if (n == 0) { /* connection closed -> try to process and then remove */
 			process_request(c);
 			http_close(c);
+			end_pool();
 			return;
 		}
 		if ((s[0] != '\r' || s[1] != '\n') && (s[0] != '\n')) {
 			send_http_response(c, " 411 length is required for non-empty body\r\nConnection: close\r\n\r\n");
 			http_close(c);
+			end_pool();
 			return;
 		}
     }
+	end_pool();
 }
 
+/* NOTE: we are responsible for freeing parg */
 static void HTTP_connected(void *parg) {
 	args_t *arg = (args_t*) parg;
 
@@ -864,8 +902,11 @@ static void HTTP_connected(void *parg) {
 		return;
 	}
 
+	begin_pool("HTTP_connected");
+
 	if (!(arg->line_buf = (char*) malloc(LINE_BUF_SIZE))) {
 		ulog_error("unable to allocate line buffer");
+		end_pool();
 		free(arg);
 		return;
 	}
@@ -879,6 +920,8 @@ static void HTTP_connected(void *parg) {
 		http_input_iteration(arg);
 
 	free_args(arg);
+	end_pool();
+	free(arg);
 }
 
 /* --- client API --- */
@@ -920,6 +963,13 @@ int http_request_set_url(http_request_t *req, const char *path, const char *quer
 	return 0;
 }
 
+static void http_server_fin(void *ptr) {
+	server_t *srv = (server_t*) ptr;
+	server_fin(ptr);
+	if (srv->aux)
+		free(srv->aux);
+}
+
 #ifdef NO_WEBSOCKETS
 server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, void *ws_connected)
 #else
@@ -937,7 +987,7 @@ server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, ws_
 		/* srv->send_resp = */
 		srv->recv      = server_recv;
 		srv->send      = server_send;
-		srv->fin       = server_fin;
+		srv->fin       = http_server_fin;
 		srv->aux       = aux;
 		add_server(srv);
 		return srv;

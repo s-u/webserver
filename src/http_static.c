@@ -24,11 +24,24 @@ typedef struct http_static {
     int flags;
 } http_static;
 
+void http_static_free(http_static *hs) {
+    if (!hs)
+	return;
+    if (hs->prefix)
+	free(hs->prefix);
+    if (hs->path)
+	free(hs->path);
+    if (hs->index)
+	free(hs->index);
+    free(hs);
+}
+
 http_static *http_static_entry(const char *prefix, const char *path,
 			       const char *index, int flags) {
     http_static *hs;
     if (!prefix || !path)
 	return 0;
+
     hs = (http_static*) calloc(1, sizeof(http_static));
     if (!hs)
 	return 0;
@@ -45,6 +58,7 @@ http_static *http_static_entry(const char *prefix, const char *path,
     }
     hs->flags = flags;
     hs->prefix_len = strlen(prefix); /* cached for performance */
+
     return hs;
 }
 
@@ -60,16 +74,21 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
     /* this should never happen, but just to be safe ... */
     if (!req || !req->url || !hs) return 0;
 
+    begin_pool("http_static_handler");
+
     path = req->url;
     DBG(ulog_debug("match '%s' and '%s'", path, hs->prefix));
-    if (strncmp(hs->prefix, path, hs->prefix_len))
+    if (strncmp(hs->prefix, path, hs->prefix_len)) {
+	end_pool();
 	return 0;
+    }
 
     fn = path + hs->prefix_len;
     if (strlen(fn) + strlen(hs->path) +
 	(hs->index ? strlen(hs->index) : 0) + 7 > sizeof(http_tmp)) {
 	res->code = 414;
 	res->err = strdup("Path too long.");
+	end_pool();
 	return 1;
     }
     strcpy(http_tmp, hs->path);
@@ -93,6 +112,7 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
 	
     /* not found + stop = 404 */
     if (!found) {
+	end_pool();
 	if (hs->flags & HSF_STOP) {
 	    res->code = 404;
 	    return 1;
@@ -114,6 +134,7 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
 			 append_headers ? append_headers : "");
 		res->headers = strdup(http_tmp);
 		res->code = 304;
+		end_pool();
 		return 1;
 	    }
 	}
@@ -154,5 +175,6 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
              append_headers ? append_headers : ""
         );
     res->headers = strdup(http_tmp);
+    end_pool();
     return 1;
 }

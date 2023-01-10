@@ -20,6 +20,7 @@ typedef struct http_static http_static;
 */
 http_static *http_static_entry(const char *prefix, const char *path,
 			       const char *index, int flags);
+void http_static_free(http_static *hs);
 
 /* handler to register with the http system to use this facility */
 int http_static_handler(http_request_t *req, http_result_t *res, void *user);
