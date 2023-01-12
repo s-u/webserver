@@ -20,10 +20,10 @@ int set_tls_ca(tls_t *tls, const char *fn_ca, const char *path_ca);
 int set_tls_verify(tls_t *tls, int verify);
 void free_tls(tls_t *tls);
 
-int add_tls(args_t *c, tls_t *tls, int server);
-void copy_tls(args_t *src, args_t *dst);
-void close_tls(args_t *c);
-int verify_peer_tls(args_t *c, char *cn, int len);
+int  add_tls(client_connection_t *c, tls_t *tls, int server);
+void copy_tls(client_connection_t *src, client_connection_t *dst);
+void close_tls(client_connection_t *c);
+int  verify_peer_tls(client_connection_t *c, char *cn, int len);
 
 int perror_tls(const char *format, ...);
 #endif

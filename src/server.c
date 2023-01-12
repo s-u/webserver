@@ -15,6 +15,11 @@
 #define DBG(X) while(0) {}
 #endif
 
+/* all connections must start with the connection_info structure */
+struct client_connection {
+	client_connection_info_t info;
+};
+
 #ifndef WIN32
 #include <sys/un.h> /* needed for unix sockets */
 #endif
@@ -69,12 +74,14 @@ void close_all_srv_sockets(void) {
 
 /* provides client socket from accept() to the server so that it can
    modify the socket as needed according to the server flags */
-void accepted_server(server_t *srv, int cs) {
+static void accepted_server(client_connection_t *conn) {
+	if (!conn || !conn->info.srv)
+		return;
 #ifdef SO_KEEPALIVE
 	/* if keep-alive is enabled and supported - try to set it */
-	if (srv->flags & SRV_KEEPALIVE) {
+	if (conn->info.srv->flags & SRV_KEEPALIVE) {
 		int ka = 1;
-		setsockopt(cs, SOL_SOCKET, SO_KEEPALIVE, &ka, sizeof(ka));
+		setsockopt(conn->info.s, SOL_SOCKET, SO_KEEPALIVE, &ka, sizeof(ka));
 	}
 #endif
 }
@@ -196,8 +203,7 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 	return srv;
 }
 
-void server_fin(void *ptr) {
-	server_t *srv = (server_t*) ptr;
+static void server_fin(server_t *srv) {
 	if (srv) {
 		if (srv->ss != -1) {
 			closesocket(srv->ss);
@@ -280,8 +286,7 @@ int rm_server(server_t *srv) {
 			servers--;
 		} else i++;
 	}
-	if (srv->fin)
-		srv->fin(srv);
+	server_fin(srv);
 
 	DBG(ulog_debug("removing server %p (total %d servers left)", (void*) srv, servers));
 
@@ -289,35 +294,16 @@ int rm_server(server_t *srv) {
 }
 
 /* FIXME: those are copied from Rserve.c for now - clean it up ! */
-static int UCIX = 1;
 static int use_ipv6 = 0;
 static int is_child = 0;
 static char **allowed_ips;
 
-struct args {
-	server_t *srv; /* server that instantiated this connection */
-    SOCKET s;
-	SOCKET ss;
-	int msg_id;
-	void *res1, *res2;
-	/* the following entries are not populated by Rserve but can be used by server implemetations */
-	char *buf, *sbuf;
-	int   ver, bp, bl, sp, sl, flags;
-	size_t l1, l2;
-	/* The following fields are informational, populated by Rserve */
-    SAIN sa;
-    int ucix;
-#ifndef WIN32
-    struct sockaddr_un su;
-#endif
-};
-
-ssize_t server_recv(args_t *arg, void *buf, size_t len) {
-	return recv(arg->s, buf, len, 0);
+ssize_t server_recv(client_connection_t *arg, void *buf, size_t len) {
+	return recv(arg->info.s, buf, len, 0);
 }
 
-ssize_t server_send(args_t *arg, const void *buf, size_t len) {
-	return send(arg->s, buf, len, 0);
+ssize_t server_send(client_connection_t *arg, const void *buf, size_t len) {
+	return send(arg->info.s, buf, len, 0);
 }
 
 typedef void (*sig_fn_t)(int);
@@ -366,9 +352,9 @@ static void restore_signal_handlers(void) {
 #endif
 
 #ifdef FORKED
-static int RS_fork(args_t *arg) {
+static int RS_fork(client_connection_t *arg) {
 #ifndef WIN32
-	return (arg->srv && arg->srv->fork) ? arg->srv->fork(arg) : fork();
+	return (arg->info.srv && arg->info.srv->fork) ? arg->info.srv->fork(arg) : fork();
 #else
 	return -1;
 #endif
@@ -415,49 +401,37 @@ void serverLoop(void) {
 				int succ = 0;
 				if (server[i] && FD_ISSET(ss, &readfds)) {
 					/* we may not know the size of args since servers may
-					   choose to add fileds, so allocate 1k which is safe */
-					struct args *sa = (struct args*)calloc(1024, 1);
-					al = sizeof(sa->sa);
+					   choose to add fileds, so allocate 1k which is connfe */
+					client_connection_t *conn = (client_connection_t*)calloc(CLIENT_CONNECTION_ALLOC_SIZE, 1);
+					al = sizeof(conn->info.sa);
 #ifndef WIN32
 					if (server[i]->unix_socket) {
-						al = sizeof(sa->su);
-						sa->s = accept(ss, (SA*)&(sa->su), &al);
+						al = sizeof(conn->info.su);
+						conn->info.s = accept(ss, (SA*)&(conn->info.su), &al);
 					} else
 #endif
-						sa->s = accept(ss, (SA*)&(sa->sa), &al);
-					if (sa->s == INVALID_SOCKET) {
+						conn->info.s = accept(ss, (SA*)&(conn->info.sa), &al);
+					if (conn->info.s == INVALID_SOCKET) {
 						ulog_error("accept failed: %s", strerror(errno));
-						free(sa);
+						free(conn);
 						continue;
 					}
 
-					accepted_server(srv, sa->s);
-					sa->ucix = UCIX++;
-					sa->ss = ss;
-					sa->srv = srv;
-					/*
-					  memset(sa->sk,0,16);
-					  sa->sfd=-1;
-					  #if defined SESSIONS && defined FORKED
-					  {
-					  int pd[2];
-					  if (!pipe(&pd)) {
-					  
-					  }
-					  }
-					  #endif
-					*/
+					conn->info.srv = srv;
+					accepted_server(conn);
+
+					/* FIXME: we want to have a generic way of adding connection filters */
 					if (allowed_ips && !srv->unix_socket && !use_ipv6) {
-						/* FIXME: IPv6 unsafe - filtering won't work on IPv6 addresses */
+						/* FIXME: IPv6 unconnfe - filtering won't work on IPv6 addresses */
 						char **laddr = allowed_ips;
 						int allowed = 0;
 						while (*laddr)
-							if (sa->sa.sin_addr.s_addr == inet_addr(*(laddr++)))
+							if (conn->info.sa.sin_addr.s_addr == inet_addr(*(laddr++)))
 								{ allowed=1; break; }
 						if (allowed) {
 							DBG(ulog_debug("accepted connection for server %p, calling connected", (void*) srv));
 
-							srv->connected(sa);
+							srv->connected(conn);
 							succ = 1;
 #ifdef FORKED
 							/* when the child returns it means it's done (likely an error)
@@ -468,12 +442,13 @@ void serverLoop(void) {
 						} else {
 							/* FIXME: only in debug mode? */
 							DBG(ulog_info("peer is not on allowed IP list, closing connection"));
-							closesocket(sa->s);
+							closesocket(conn->info.s);
+							conn->info.s = -1;
 						}
 					} else { /* ---> remote enabled */
 						DBG(ulog_info("accepted connection for server %p, calling connected", (void*) srv));
 
-						srv->connected(sa);
+						srv->connected(conn);
 						succ = 1;
 						if (is_child) /* same as above */
 							exit(2);
@@ -482,7 +457,7 @@ void serverLoop(void) {
 					   so it is expected to free the args - hence free only if
 					   it was not called */
 					if (!succ)
-						free(sa);
+						free(conn);
 				} /* ready server */
 			} /* severs loop */
 		} /* select */
@@ -496,21 +471,15 @@ void serverLoop(void) {
 static pid_t lastChild, parentPID;
 #endif
 
-static args_t *self_args;
-
-int prepare_child(args_t *args) {
-#ifdef FORKED  
-	long rseed = random();
-
-    rseed ^= time(0);
-
+int prepare_child(client_connection_t *args) {
+#ifdef FORKED
 	if (is_child) return 0; /* this is a no-op if we are already a child
 							   FIXME: thould this be an error ? */
 
     if ((lastChild = RS_fork(args)) != 0) { /* parent/master part */
 		int forkErrno = errno; //grab errno close to source before it can be changed by other failures
 		/* close the connection socket - the child has it already */
-		closesocket(args->s);
+		closesocket(args->info.s);
 		if (lastChild == -1)
 			ulog_warn("WARNING: fork() failed in prepare_child(): %s", strerror(forkErrno));
 		return lastChild;
@@ -525,21 +494,24 @@ int prepare_child(args_t *args) {
 #endif
 	is_child = 1;
 
-	srandom(rseed);
-    
+	if (args->info.srv->flags & SRV_INIT_RNG) { /* this is not great, but better than nothing */
+		long rseed = random();
+		rseed ^= time(0);
+		rseed ^= ((long) getpid()) << 16;
+		srandom(rseed);
+	}
+
     parentPID = getppid();
-    close_all_srv_sockets(); /* close all server sockets - this includes arg->ss */
+    close_all_srv_sockets(); /* close all server sockets */
 
 #ifdef CAN_TCP_NODELAY
     {
      	int opt = 1;
-        setsockopt(args->s, IPPROTO_TCP, TCP_NODELAY, (const char*) &opt, sizeof(opt));
+        setsockopt(args->info.s, IPPROTO_TCP, TCP_NODELAY, (const char*) &opt, sizeof(opt));
     }
 #endif
 
 #endif
-
-	self_args = args;
 
 	return 0;
 }

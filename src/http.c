@@ -38,6 +38,9 @@
 #define CONTENT_FORM_UENC 0x0080 /* message content type is application/x-www-form-urlencoded */
 #define WS_UPGRADE        0x0100 /* upgrade to WebSockets protocol */
 
+/* used by http_send_respose to limit the size sent at once. Must be at most 31-bit */
+#define MAX_SEND_LEN (1024*1024)
+
 /* descriptions to send with 40x status codes, all others will get "Code xxx" instead */
 const char *http_40x[] = { "Bad Request", "Unauthorized", "Payment Required", "Forbidden",
 						   "Not Found", "Method Not Allowed", "Not Acceptable" };
@@ -62,34 +65,23 @@ struct aux_pass {
 #endif
 };	
 
-struct args {
-	server_t *srv; /* server that instantiated this connection */
-    SOCKET s;
-	SOCKET ss;
-	int msg_id;
-	void *res1, *res2;
-	/* the following entries are not populated by Rserve but can be used by server implemetations */
-	char *buf, *sbuf;
-	int   ver, bp, bl, sp, sl, flags;
-	size_t  l1, l2;
-	/* The following fields are informational, populated by Rserve */
-    SAIN sa;
-    int ucix;
-#ifdef unix
-    struct sockaddr_un su;
-#endif
-    char *line_buf;                /* line buffer (used for request and headers) */
-    char *url, *body;              /* URL and request body */
-    char *content_type;            /* content type (if set) */
-    unsigned int line_pos, body_pos; /* positions in the buffers */
-    long content_length;           /* desired content length */
-    char part, method;             /* request part, method */
+struct client_connection {
+	/* common information for all connections */
+	client_connection_info_t info;
+
+	/* private vars for http connections */
+	char *line_buf;                /* line buffer (used for request and headers) */
+	char *url, *body;              /* URL and request body */
+	char *content_type;            /* content type (if set) */
+	unsigned int line_pos, body_pos; /* positions in the buffers */
+	size_t content_length;           /* desired content length */
+	char part, method;             /* request part, method */
 	char method8[8];               /* first 7 characters of method */
 	int  attr;                     /* connection attributes */
 	double req_date;               /* request date */
 	char *ws_protocol, *ws_version, *ws_key;
 	char *auth;                    /* authorization header (if set) */
-    struct buffer *headers;        /* buffer holding header lines */
+	struct buffer *headers;        /* buffer holding header lines */
 	struct aux_pass *aux;
 };
 
@@ -150,60 +142,59 @@ static buf_t *collect_buffers(struct buffer *buf) {
     return res;
 }
 
-static void free_args(args_t *c)
+/* resets all allocated structures without touching the connection itself.
+   This is used when the request has been answered to prepare for a new one. */
+static void conn_request_done(client_connection_t *c) {
+	if (c->url) { free(c->url); c->url = NULL; }
+	if (c->body) { free(c->body); c->body = NULL; }
+	if (c->content_type) { free(c->content_type); c->content_type = NULL; }
+	if (c->auth) { free(c->auth); c->auth = NULL; }
+	if (c->headers) { free_buffer(c->headers); c->headers = NULL; }
+	if (c->ws_key) { free(c->ws_key); c->ws_key = NULL; }
+	if (c->ws_protocol) { free(c->ws_protocol); c->ws_protocol = NULL; }
+	if (c->ws_version) { free(c->ws_version); c->ws_version = NULL; }
+	c->body_pos = 0;
+	c->method = 0;
+	c->attr = 0;
+	c->content_length = 0;
+	c->req_date = 0;
+	c->part = PART_REQUEST;
+}
+
+/* closes the connection */
+static void http_close(client_connection_t *conn) {
+	if (conn->info.ssl)
+		close_tls(conn);
+	if (conn->info.s != INVALID_SOCKET)
+		closesocket(conn->info.s);
+	conn->info.s = INVALID_SOCKET;
+}
+
+static void conn_finalize(client_connection_t *c)
 {
     DBG(ulog_debug("finalizing worker %p", (void*) c));
-    if (c->url) {
-		free(c->url);
-		c->url = NULL;
-    }
+	/* close the connection */
+	http_close(c);
+	/* free all the transient variables */
+	conn_request_done(c);
+	/* then free the rest */
 	if (c->line_buf) {
 		free(c->line_buf);
 		c->line_buf = NULL;
 	}
-    if (c->body) {
-		free(c->body);
-		c->body = NULL;
-    }
-    if (c->auth) {
-		free(c->auth);
-		c->auth = NULL;
-    }
-    if (c->content_type) {
-		free(c->content_type);
-		c->content_type = NULL;
-    }
-    if (c->headers) {
-		free_buffer(c->headers);
-		c->headers = NULL;
-    }
-	if (c->ws_key) {
-		free(c->ws_key);
-		c->ws_key = NULL;
-	}
-	if (c->ws_protocol) {
-		free(c->ws_protocol);
-		c->ws_protocol = NULL;
-	}
-	if (c->ws_version) {
-		free(c->ws_version);
-		c->ws_version = NULL;
-	}
-    if (c->s != INVALID_SOCKET) {
-		closesocket(c->s);
-		c->s = INVALID_SOCKET;
-    }
 }
 
-static int send_response(args_t *c, const char *buf, size_t len)
+static int send_response(client_connection_t *c, const char *buf, size_t len)
 {
-	server_t *srv = c->srv;
+	server_t *srv = c->info.srv;
     unsigned int i = 0;
     /* we have to tell R to ignore SIGPIPE otherwise it can raise an error
        and get us into deep trouble */
     while (i < len) {
-		int n = srv->send(c, buf + i, len - i);
+		int send_len = ((len - i) > MAX_SEND_LEN) ? MAX_SEND_LEN : ((int) (len - i));
+		int n = srv->send(c, buf + i, send_len);
 		if (n < 1) {
+			/* FIXME: what about EINTR? */
 			return -1;
 		}
 		i += n;
@@ -212,9 +203,9 @@ static int send_response(args_t *c, const char *buf, size_t len)
 }
 
 /* sends HTTP/x.x plus the text (which should be of the form " XXX ...") */
-static int send_http_response(args_t *c, const char *text) {
+static int send_http_response(client_connection_t *c, const char *text) {
     char buf[96];
-	server_t *srv = c->srv;
+	server_t *srv = c->info.srv;
     const char *s = HTTP_SIG(c);
     int l = strlen(text), res;
     /* reduce the number of packets by sending the payload en-block from buf */
@@ -254,7 +245,7 @@ static void uri_decode(char *s)
 
 /* finalize a request - essentially for HTTP/1.0 it means that
  * we have to close the connection */
-static void fin_request(args_t *c) {
+static void fin_request(client_connection_t *c) {
     if (!IS_HTTP_1_1(c))
 		c->attr |= CONNECTION_CLOSE;
 }
@@ -287,7 +278,7 @@ static void web_log(http_request_t *req, http_result_t *res) {
 }
 
 /* process a request by calling the httpd() function in R */
-static void process_request(args_t *c)
+static void process_request(client_connection_t *c)
 {
     char *query = 0, *fragment = 0, *s;
     DBG(ulog_debug("process request for %p", (void*) c));
@@ -498,17 +489,12 @@ static void process_request(args_t *c)
 	end_pool();
 }
 
-static void http_close(args_t *arg) {
-	closesocket(arg->s);
-	arg->s = -1;
-}
-
 /* this function is called to fetch new data from the client
  * connection socket and process it */
-static void http_input_iteration(args_t *c) {
+static void http_input_iteration(client_connection_t *c) {
     int n;
-	server_t *srv = c->srv;
-	
+	server_t *srv = c->info.srv;
+
     DBG(ulog_debug("worker_input_handler, data=%p", (void*) c));
     if (!c) return;
 
@@ -530,7 +516,7 @@ static void http_input_iteration(args_t *c) {
 		char *s = c->line_buf;
 		n = srv->recv(c, c->line_buf + c->line_pos, LINE_BUF_SIZE - c->line_pos - 1);
 		DBG(ulog_debug("[recv n=%d, line_pos=%d, part=%d]", n, c->line_pos, (int)c->part));
-		if (n < 0) { /* error, scrape this worker */
+		if (n < 0) { /* error, scrap this worker */
 			http_close(c);
 			end_pool();
 			return;
@@ -555,7 +541,8 @@ static void http_input_iteration(args_t *c) {
 					end_pool();
 					return;
 				}
-				if (c->attr & CONTENT_LENGTH && c->content_length) {
+				if ((c->attr & CONTENT_LENGTH) && c->content_length) {
+					/* FIXME: limit on body size - make it configurable? */
 					if (c->content_length < 0 ||  /* we are parsing signed so negative numbers are bad */
 						c->content_length > 2147483640 || /* R will currently have issues with body around 2Gb or more, so better to not go there */
 						!(c->body = (char*) malloc(c->content_length + 1 /* allocate an extra termination byte */ ))) {
@@ -572,9 +559,14 @@ static void http_input_iteration(args_t *c) {
 				/* move the body part to the beginning of the buffer */
 				c->line_pos -= s - c->line_buf;
 				memmove(c->line_buf, s, c->line_pos);
-				/* GET/HEAD or no content length mean no body */
+
+				/* GET/HEAD or no content length mean no body - we got all we need */
 				if (c->method == METHOD_GET || c->method == METHOD_HEAD ||
 					!(c->attr & CONTENT_LENGTH) || c->content_length == 0) {
+
+					/* NOTE: technically, only TRACE is not allowed to send body, all others are
+					   and should be ignored - but for historical reasons, we just reject
+					   GET/HEAD with body anyway */
 					if ((c->attr & CONTENT_LENGTH) && c->content_length > 0) {
 						send_http_response(c, " 400 Bad Request (GET/HEAD with body)\r\n\r\n");
 						http_close(c);
@@ -588,22 +580,11 @@ static void http_input_iteration(args_t *c) {
 						return;
 					}
 					/* keep-alive - reset the worker so it can process a new request */
-					if (c->url) { free(c->url); c->url = NULL; }
-					if (c->body) { free(c->body); c->body = NULL; }
-					if (c->content_type) { free(c->content_type); c->content_type = NULL; }
-					if (c->auth) { free(c->auth); c->auth = NULL; }
-					if (c->headers) { free_buffer(c->headers); c->headers = NULL; }
-					if (c->ws_key) { free(c->ws_key); c->ws_key = NULL; }
-					if (c->ws_protocol) { free(c->ws_protocol); c->ws_protocol = NULL; }
-					if (c->ws_version) { free(c->ws_version); c->ws_version = NULL; }
-					c->body_pos = 0;
-					c->method = 0;
-					c->part = PART_REQUEST;
-					c->attr = 0;
-					c->content_length = 0;
+					conn_request_done(c);
 					end_pool();
 					return;
 				}
+
 				/* copy body content (as far as available) */
 				c->body_pos = (c->content_length < c->line_pos) ? c->content_length : c->line_pos;
 				if (c->body_pos) {
@@ -611,6 +592,13 @@ static void http_input_iteration(args_t *c) {
 					c->line_pos -= c->body_pos; /* NOTE: we are NOT moving the buffer since non-zero left-over causes connection close */
 				}
 				/* POST will continue into the BODY part */
+
+				/* NEW: if we don't have the full body, wait for the next iteration to avoid using recv() twice */
+				if (c->body_pos < c->content_length) {
+					end_pool();
+					return;
+				}
+				/* otherwise we have the full body so the following BODY processing won't require another read() */
 				break;
 			}
 			{
@@ -772,18 +760,26 @@ static void http_input_iteration(args_t *c) {
 							}
 							DBG(ulog_debug(" [attr = %x]", c->attr));
 						}
-					}
-				}
+					} /* processing header line */
+				} /* complete */
 			}
 		}
 		if (c->part < PART_BODY) {
-			/* we end here if we processed a buffer of exactly one line */
+			/* we end here if we processed a buffer of exactly one line
+			   (request line or a header) - so no more to rememeber
+			   and off to another iteration */
 			c->line_pos = 0;
 			end_pool();
 			return;
 		}
     }
-    if (c->part == PART_BODY && c->body) { /* BODY  - this branch always returns */
+
+	/* NOTE: we are avoiding two reads in one iteration if we can, so
+	   if the header read contained parts of the body, we moved the
+	   part into the buffer and returned from the iteration to avoid
+	   landing here. Also PART_BODY will only ever get here
+	   if there is actual body to be read */
+    if (c->part == PART_BODY && c->body) {
 		if (c->body_pos < c->content_length) { /* need to receive more ? */
 			DBG(ulog_debug("BODY: body_pos=%d, content_length=%ld", c->body_pos, c->content_length));
 			n = srv->recv(c, c->body + c->body_pos, c->content_length - c->body_pos);
@@ -795,6 +791,8 @@ static void http_input_iteration(args_t *c) {
 				return;
 			}
 			if (n == 0) { /* connection closed -> try to process and then remove */
+				/* FIXME: this may not be legal - we didn't get the entrie body,
+				   so we shouldn't really process the request ... */
 				process_request(c);
 				http_close(c);
 				end_pool();
@@ -810,118 +808,45 @@ static void http_input_iteration(args_t *c) {
 				return;
 			}
 			/* keep-alive - reset the worker so it can process a new request */
-			if (c->url) { free(c->url); c->url = NULL; }
-			if (c->body) { free(c->body); c->body = NULL; }
-			if (c->content_type) { free(c->content_type); c->content_type = NULL; }
-			if (c->auth) { free(c->auth); c->auth = NULL; }
-			if (c->headers) { free_buffer(c->headers); c->headers = NULL; }
-			if (c->ws_key) { free(c->ws_key); c->ws_key = NULL; }
-			if (c->ws_protocol) { free(c->ws_protocol); c->ws_protocol = NULL; }
-			if (c->ws_version) { free(c->ws_version); c->ws_version = NULL; }
-			c->line_pos = 0; c->body_pos = 0;
-			c->method = 0;
-			c->part = PART_REQUEST;
-			c->attr = 0;
-			c->content_length = 0;
+			conn_request_done(c);
 			end_pool();
 			return;
 		}
     }
-	
-    /* we enter here only if recv was used to leave the headers with no body */
-    if (c->part == PART_BODY && !c->body) {
-		char *s = c->line_buf;
-		if (c->line_pos > 0) {
-			if ((s[0] != '\r' || s[1] != '\n') && (s[0] != '\n')) {
-				send_http_response(c, " 411 length is required for non-empty body\r\nConnection: close\r\n\r\n");
-				http_close(c);
-				end_pool();
-				return;
-			}
-			/* empty body, good */
-			process_request(c);
-			if (c->attr & CONNECTION_CLOSE) {
-				http_close(c);
-				end_pool();
-				return;
-			} else { /* keep-alive */
-				int sh = 1;
-				if (s[0] == '\r') sh++;
-				if (c->line_pos <= sh)
-					c->line_pos = 0;
-				else { /* shift the remaining buffer */
-					memmove(c->line_buf, c->line_buf + sh, c->line_pos - sh);
-					c->line_pos -= sh;
-				}
-				/* keep-alive - reset the worker so it can process a new request */
-				if (c->url) { free(c->url); c->url = NULL; }
-				if (c->body) { free(c->body); c->body = NULL; }
-				if (c->content_type) { free(c->content_type); c->content_type = NULL; }
-				if (c->auth) { free(c->auth); c->auth = NULL; }
-				if (c->headers) { free_buffer(c->headers); c->headers = NULL; }
-				if (c->ws_key) { free(c->ws_key); c->ws_key = NULL; }
-				if (c->ws_protocol) { free(c->ws_protocol); c->ws_protocol = NULL; }
-				if (c->ws_version) { free(c->ws_version); c->ws_version = NULL; }
-				c->body_pos = 0;
-				c->method = 0;
-				c->part = PART_REQUEST;
-				c->attr = 0;
-				c->content_length = 0;
-				end_pool();
-				return;
-			}
-		}
-		n = srv->recv(c, c->line_buf + c->line_pos, LINE_BUF_SIZE - c->line_pos - 1);
-		if (n < 0) { /* error, scrap this worker */
-			http_close(c);
-			end_pool();
-			return;
-		}
-		if (n == 0) { /* connection closed -> try to process and then remove */
-			process_request(c);
-			http_close(c);
-			end_pool();
-			return;
-		}
-		if ((s[0] != '\r' || s[1] != '\n') && (s[0] != '\n')) {
-			send_http_response(c, " 411 length is required for non-empty body\r\nConnection: close\r\n\r\n");
-			http_close(c);
-			end_pool();
-			return;
-		}
-    }
+
+	/* there used to be code that handled PART_BODY and !body, but that is impossible,
+	   because when PART_BODY is set the no-body case is already handled and never gets here.
+	   So the only time we get here is when we did a partial read of the body. */
 	end_pool();
 }
 
-/* NOTE: we are responsible for freeing parg */
-static void HTTP_connected(void *parg) {
-	args_t *arg = (args_t*) parg;
-
-	if (prepare_child(arg) != 0) { /* parent or error */
-		free(arg);
+/* NOTE: we are responsible for freeing conn */
+static void HTTP_connected(client_connection_t *conn) {
+	if (prepare_child(conn) != 0) { /* parent or error */
+		free(conn);
 		return;
 	}
 
 	begin_pool("HTTP_connected");
 
-	if (!(arg->line_buf = (char*) malloc(LINE_BUF_SIZE))) {
+	if (!(conn->line_buf = (char*) malloc(LINE_BUF_SIZE))) {
 		ulog_error("unable to allocate line buffer");
 		end_pool();
-		free(arg);
+		free(conn);
 		return;
 	}
 
-	arg->aux = (struct aux_pass*) arg->srv->aux;
+	conn->aux = (struct aux_pass*) conn->info.srv->aux;
 
-	if ((arg->srv->flags & SRV_TLS) && shared_tls(0))
-		add_tls(arg, shared_tls(0), 1);
+	if ((conn->info.srv->flags & SRV_TLS) && shared_tls(0))
+		add_tls(conn, shared_tls(0), 1);
 
-	while (arg->s != -1)
-		http_input_iteration(arg);
+	while (conn->info.s != -1)
+		http_input_iteration(conn);
 
-	free_args(arg);
+	conn_finalize(conn);
 	end_pool();
-	free(arg);
+	free(conn);
 }
 
 /* --- client API --- */
@@ -963,9 +888,7 @@ int http_request_set_url(http_request_t *req, const char *path, const char *quer
 	return 0;
 }
 
-static void http_server_fin(void *ptr) {
-	server_t *srv = (server_t*) ptr;
-	server_fin(ptr);
+static void http_server_fin(server_t *srv) {
 	if (srv->aux)
 		free(srv->aux);
 }
@@ -987,7 +910,7 @@ server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, ws_
 		/* srv->send_resp = */
 		srv->recv      = server_recv;
 		srv->send      = server_send;
-		srv->fin       = http_server_fin;
+		srv->fin       = http_server_fin; /* frees aux */
 		srv->aux       = aux;
 		add_server(srv);
 		return srv;

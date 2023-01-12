@@ -3,6 +3,7 @@
 #endif
 
 #include "tls.h"
+#include "ulog.h"
 
 #ifdef HAVE_TLS
 
@@ -10,6 +11,10 @@
 #include <stdarg.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+
+struct client_connection {
+    client_connection_info_t info;
+};
 
 struct tls {
     SSL_CTX *ctx;
@@ -60,46 +65,41 @@ int set_tls_verify(tls_t *tls, int verify) {
     return 1;
 }
 
-struct args {
-    server_t *srv; /* server that instantiated this connection */
-    int s;
-    int ss;
-    int msg_id;
-    SSL *ssl;
-    void *res2;
-};
-
-static ssize_t tls_recv(args_t *c, void *buf, size_t len) {
-    return SSL_read(c->ssl, buf, len);
+static ssize_t tls_recv(client_connection_t *c, void *buf, size_t len) {
+    return SSL_read((SSL*) c->info.ssl, buf, len);
 }
 
-static ssize_t tls_send(args_t *c, const void *buf, size_t len) {
-    return SSL_write(c->ssl, buf, len);
+static ssize_t tls_send(client_connection_t *c, const void *buf, size_t len) {
+    return SSL_write((SSL*) c->info.ssl, buf, len);
 }
 
-int add_tls(args_t *c, tls_t *tls, int server) {
-    c->ssl = SSL_new(tls->ctx);
-    c->srv->send = tls_send;
-    c->srv->recv = tls_recv;
-    SSL_set_fd(c->ssl, c->s);
+int add_tls(client_connection_t *c, tls_t *tls, int server) {
+    SSL *ssl = SSL_new(tls->ctx);
+    c->info.ssl = ssl;
+    c->info.srv->send = tls_send;
+    c->info.srv->recv = tls_recv;
+    SSL_set_fd(ssl, c->info.s);
     if (server) 
-	return SSL_accept(c->ssl);
+	return SSL_accept(ssl);
     else
-	return SSL_connect(c->ssl);
+	return SSL_connect(ssl);
 }
 
-void copy_tls(args_t *src, args_t *dst) {
-    dst->ssl = src->ssl;
-    dst->s   = src->s;
-    dst->srv->send = src->srv->send;
-    dst->srv->recv = src->srv->recv;
+/* FIXME: when is this used - do we need to worry about ownership transfer of SSL? */
+void copy_tls(client_connection_t *src, client_connection_t *dst) {
+    dst->info.ssl  = src->info.ssl;
+    dst->info.s    = src->info.s;
+    dst->info.srv->send = src->info.srv->send;
+    dst->info.srv->recv = src->info.srv->recv;
 }
 
-void close_tls(args_t *c) {
-    if (c->ssl) {
-	SSL_shutdown(c->ssl);
-	SSL_free(c->ssl);
-	c->ssl = 0;
+void close_tls(client_connection_t *c) {
+    if (c->info.ssl) {
+	SSL *ssl = (SSL*) c->info.ssl;
+	SSL_shutdown(ssl);
+	/* NOTE: we are not performing a two-step shutdown. */
+	SSL_free(ssl);
+	c->info.ssl = 0;
     }
 }
 
@@ -112,25 +112,26 @@ void free_tls(tls_t *tls) {
    0 = present but verification failed
    1 = present and verification successful
   -1 = absent */
-int verify_peer_tls(args_t *c, char *cn, int len) {
+int verify_peer_tls(client_connection_t *c, char *cn, int len) {
     X509 *peer;
-    if ((peer = SSL_get_peer_certificate(c->ssl))) {
+    SSL *ssl = (SSL*) c->info.ssl;
+    if ((peer = SSL_get_peer_certificate(ssl))) {
 	if (cn && len > 0) {
 	    X509_NAME *sn = X509_get_subject_name(peer);
 	    X509_NAME_get_text_by_NID(sn, NID_commonName, cn, len);
-	    fprintf(stderr, "INFO: peer cert common name: \"%s\"\n", cn);
+	    ulog_info("peer cert common name: \"%s\"", cn);
 	}
 	X509_free(peer);
-	if (SSL_get_verify_result(c->ssl) == X509_V_OK) {
-	    fprintf(stderr, "INFO: peer cert present and OK\n");
+	if (SSL_get_verify_result(ssl) == X509_V_OK) {
+	    ulog_info("peer cert present and OK");
 	    return 1;
 	} else {
-	    fprintf(stderr, "INFO: peer cert present, but verification FAILED\n");
+	    ulog_warn("peer cert present, but verification FAILED");
 	    return 0;
 	}
     }
 
-    fprintf(stderr, "INFO: peer nas NO cert\n");
+    ulog_info("INFO: peer nas NO cert");
     return -1;
 }
 
@@ -156,10 +157,10 @@ int set_tls_ca(tls_t *tls, const char *fn_ca, const char *path_ca) { return -1; 
 int set_tls_verify(tls_t *tls, int verify) { return -1; }
 void free_tls(tls_t *tls) { }
 
-int add_tls(args_t *c, tls_t *tls, int server) { return -1; }
-void copy_tls(args_t *src, args_t *dst) { }
-void close_tls(args_t *c) { }
-int verify_peer_tls(args_t *c, char *cn, int len) { return -1; }
+int add_tls(client_connection_t *c, tls_t *tls, int server) { return -1; }
+void copy_tls(client_connection_t *src, client_connection_t *dst) { }
+void close_tls(client_connection_t *c) { }
+int verify_peer_tls(client_connection_t *c, char *cn, int len) { return -1; }
 
 int perror_tls(const char *format, ...) {
     fprintf(stderr, "ERROR: this binary has been built without SSL/TLS support.\n");
