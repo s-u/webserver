@@ -9,7 +9,7 @@
    License: MIT
 */
 
-char  *posix2http(double ts); /* Note: returned buffer is static */
+char *posix2http(double ts, char date_buf[32]);
 double http2posix(const char *c);
 
 #endif

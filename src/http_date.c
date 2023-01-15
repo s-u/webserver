@@ -20,13 +20,24 @@ static const char *c_wkd[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" 
 static const char *c_mon[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul",
 				 "Aug", "Sep", "Oct", "Nov", "Dec" };
 
-static char date_buf[64];
-
-char *posix2http(double ts) {
+/* the date has fixed length of 29 characters so we use 32 to be safe */
+char *posix2http(double ts, char date_buf[32]) {
     time_t t = (time_t) ts;
-    struct tm *tm = gmtime(&t);
-    if (!tm) return 0;
-    snprintf(date_buf, sizeof(date_buf),
+    struct tm *tm;
+    int year;
+
+    if (!t || !(tm = gmtime(&t))) { /* short-circuit the 0 case and errors */
+	strcpy(date_buf, "Thu, 01 Jan 1970 00:00:00 GMT");
+	return date_buf;
+    }
+    /* make sure the year does not overflow 4 digits
+       (only in case time_t is 64-bit) */
+    year = tm->tm_year + 1900;
+    if (year < 0)
+	year = 0;
+    else if (year > 9999)
+	year = 9999;
+    snprintf(date_buf, 32,
 	     "%s, %02d %s %d %02d:%02d:%02d GMT",
 	     c_wkd[tm->tm_wday], tm->tm_mday, c_mon[tm->tm_mon],
 	     tm->tm_year + 1900, tm->tm_hour, tm->tm_min, tm->tm_sec);

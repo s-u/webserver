@@ -270,9 +270,8 @@ static void free_res(http_result_t* res) {
 
 /* -- logging -- */
 
-static char wlbuf[256];
-
 static void web_log(http_request_t *req, http_result_t *res) {
+	char wlbuf[256];
 	const char *c = req->headers ? strstr(req->headers, "X-Real-IP:") : "";
 	if (c) {
 		const char *d;
@@ -405,7 +404,8 @@ static void process_request(client_connection_t *c)
 			if (res.date < 0.0)
 				send_response(c, "\r\n", 2);
 			else {
-				sprintf(buf, "\r\nDate: %s\r\n", posix2http(res.date));
+				char date[32];
+				sprintf(buf, "\r\nDate: %s\r\n", posix2http(res.date, date));
 				send_response(c, buf, strlen(buf));
 			}
 

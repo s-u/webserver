@@ -127,11 +127,12 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
 	if (if_mod) {
 	    double since = http2posix(if_mod);
 	    if (since >= MTIME(st)) {
+		char date[32];
 		/* the standard requires only Cache-Control (and ETag if used),
 		   but suggests Last-Modified if there is no ETag */
 		snprintf(http_tmp, sizeof(http_tmp),
 			 "Last-Modified: %s\r\nCache-Control: no-cache\r\n%s",
-			 posix2http(MTIME(st)),
+			 posix2http(MTIME(st), date),
 			 append_headers ? append_headers : "");
 		res->headers = strdup(http_tmp);
 		res->code = 304;
@@ -171,10 +172,13 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
 
     /* append Last-Modified: based on the served file and set no-cache */
     ts = (double) time(0);
-    snprintf(http_tmp, sizeof(http_tmp), "Last-Modified: %s\r\nCache-Control: no-cache\r\n%s",
-             posix2http((MTIME(st) > ts) ? ts : MTIME(st)),
-             append_headers ? append_headers : ""
-        );
+    {
+	char date[32];
+	snprintf(http_tmp, sizeof(http_tmp), "Last-Modified: %s\r\nCache-Control: no-cache\r\n%s",
+		 posix2http((MTIME(st) > ts) ? ts : MTIME(st), date),
+		 append_headers ? append_headers : ""
+		 );
+    }
     res->headers = strdup(http_tmp);
     end_pool();
     return 1;
