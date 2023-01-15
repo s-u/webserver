@@ -84,6 +84,25 @@ static async_job_list *async_job_list_ensure(async_job_list *orig, int alloc) {
     return njl;
 }
 
+int  async_queue_signal_ready(async_queue *q, client_connection_t *conn) {
+    async_conn *c;
+    if (!q || !conn)
+	return -1;
+    pthread_mutex_lock(&(q->mux));
+    c = q->head;
+    while (c && c->conn != conn)
+	c = c->next;
+    if (!c) {
+	pthread_mutex_unlock(&(q->mux));
+	return -1;
+    }
+    c->state |= ACS_READY;
+
+    pthread_cond_broadcast(&(q->cond));
+    pthread_mutex_unlock(&(q->mux));
+    return 0;
+}
+
 static int async_queue_add_(async_queue *q, client_connection_t *conn, int lock) {
     async_conn *ac;
     if (!conn)
@@ -162,7 +181,7 @@ static int async_queue_setup_poll(async_queue *q, int rm) {
 		free(me);
 		continue;
 	    }
-	} else {
+	} else if (c->conn->info.s == FD_VIRTUAL) {
 	    q->pf[n].fd = c->conn->info.s;
 	    q->pf[n].events = POLLIN;
 	    n++;
@@ -233,7 +252,16 @@ void async_queue_process(async_queue *q, double timeout) {
 	if (tries++) { /* wait only if we checked already once */
 	    struct timespec ts;
 	    /* possibilities: gettimeofday, clock_gettime, timespec_get */
+#ifdef __APPLE__
+	    /* on macOS we need a run-time check since R binaires support 10.13 and up */
+	    if (__builtin_available(macOS 10.15, *)) {
+		timespec_get(&ts, TIME_UTC);
+	    } else {
+		clock_gettime(CLOCK_REALTIME, &ts);
+	    }
+#else
 	    timespec_get(&ts, TIME_UTC);
+#endif
 	    ts.tv_nsec += (timeout - (double)((int) timeout)) * 1000000000.0;
 	    ts.tv_sec += (int) timeout;
 	    if (ts.tv_nsec >= 1000000000.0) {
