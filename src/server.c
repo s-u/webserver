@@ -210,6 +210,8 @@ static void server_fin(server_t *srv) {
 			rm_active_srv_socket(srv->ss);
 			srv->ss = -1;
 		}
+		if (srv->fin)
+			srv->fin(srv);
 	}
 }
 
