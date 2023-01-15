@@ -85,6 +85,11 @@ struct client_connection {
 	struct aux_pass *aux;
 };
 
+typedef struct accept_connection {
+	/* common information for all connections */
+	client_connection_info_t info;
+} accept_connection;
+
 #define IS_HTTP_1_1(C) (((C)->attr & HTTP_1_0) == 0)
 
 /* returns the HTTP/x.x string for a given connection - we support 1.0 and 1.1 only */
@@ -165,8 +170,14 @@ static void conn_request_done(client_connection_t *c) {
 static void http_close(client_connection_t *conn) {
 	if (conn->info.ssl)
 		close_tls(conn);
-	if (conn->info.s != INVALID_SOCKET)
+	if (conn->info.s != INVALID_SOCKET) {
+#if 0 /* attempt to avoid TIME_WAIT, but failed */
+		char xx[4];
+		shutdown(conn->info.s, SHUT_RDWR);
+		recv(conn->info.s, xx, 1, 0);
+#endif
 		closesocket(conn->info.s);
+	}
 	conn->info.s = INVALID_SOCKET;
 }
 
@@ -498,7 +509,7 @@ static void http_input_iteration(client_connection_t *c) {
     DBG(ulog_debug("worker_input_handler, data=%p", (void*) c));
     if (!c) return;
 
-    DBG(ulog_debug("input handler for worker %p (sock=%d, part=%d, method=%d, line_pos=%d)", (void*) c, (int)c->s, (int)c->part, (int)c->method, (int)c->line_pos));
+    DBG(ulog_debug("input handler for worker %p (sock=%d, part=%d, method=%d, line_pos=%d)", (void*) c, (int)c->info.s, (int)c->part, (int)c->method, (int)c->line_pos));
 
 	begin_pool("http_input_iteration");
 
@@ -820,6 +831,10 @@ static void http_input_iteration(client_connection_t *c) {
 	end_pool();
 }
 
+#include "async.h"
+
+static async_queue *http_queue;
+
 /* NOTE: we are responsible for freeing conn */
 static void HTTP_connected(client_connection_t *conn) {
 	if (prepare_child(conn) != 0) { /* parent or error */
@@ -841,12 +856,22 @@ static void HTTP_connected(client_connection_t *conn) {
 	if ((conn->info.srv->flags & SRV_TLS) && shared_tls(0))
 		add_tls(conn, shared_tls(0), 1);
 
-	while (conn->info.s != -1)
-		http_input_iteration(conn);
+	if ((conn->info.srv->flags & SRV_ASYNC_PROCESS)) {
+		DBG(ulog_debug("HTTP_connected: adding connection (%p) to queue", (void*) conn));
+		/* we will be called from the accept handler so we are alrady in the critical region */
+		if ((conn->info.srv->flags & SRV_ASYNC_ACCEPT))
+			async_queue_add_inside(http_queue, conn);
+		else
+			async_queue_add(http_queue, conn);
+		end_pool();
+	} else {
+		while (conn->info.s != -1)
+			http_input_iteration(conn);
 
-	conn_finalize(conn);
-	end_pool();
-	free(conn);
+		conn_finalize(conn);
+		end_pool();
+		free(conn);
+	}
 }
 
 /* --- client API --- */
@@ -893,6 +918,23 @@ static void http_server_fin(server_t *srv) {
 		free(srv->aux);
 }
 
+static int http_threads = 0;
+
+int http_start_threads(int n) {
+	if (!http_queue) {
+		http_queue = async_queue_new();
+		if (!http_queue)
+			return -1;
+		async_queue_start_poll_thread(http_queue);
+	}
+	/* create processing threads */
+	while (http_threads < n) {
+		async_run(async_job_process_queue, http_queue);
+		http_threads++;
+	}
+	return http_threads;
+}
+
 #ifdef NO_WEBSOCKETS
 server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, void *ws_connected)
 #else
@@ -911,8 +953,29 @@ server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, ws_
 		srv->recv      = server_recv;
 		srv->send      = server_send;
 		srv->fin       = http_server_fin; /* frees aux */
+		srv->conn_fin  = conn_finalize;
+		srv->process   = http_input_iteration;
 		srv->aux       = aux;
-		add_server(srv);
+
+		if (flags & (SRV_ASYNC_ACCEPT | SRV_ASYNC_PROCESS)) {
+			if (!http_queue && http_start_threads(1) < 1) {
+				ulog_error("cannot create HTTP processing queue");
+				free(aux);
+				free(srv);
+				return 0;
+			}
+			if (flags & SRV_ASYNC_ACCEPT) {
+				/* create connection (and its server) for the accept stage */
+				server_t *asrv = create_accept_server(srv);
+				accept_connection *aconn = (accept_connection*) calloc(sizeof(accept_connection), 1);
+				aconn->info.s = srv->ss;
+				aconn->info.srv = asrv;
+				add_server(srv);
+				async_queue_add(http_queue, (client_connection_t*) aconn);
+			} else
+				add_server(srv);
+		} else
+			add_server(srv);
 		return srv;
 	}
 	return 0;

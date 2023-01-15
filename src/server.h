@@ -1,8 +1,11 @@
 #ifndef RS_SERVER_H__
 #define RS_SERVER_H__
 
-/* this is a voluntary standart flag to request TLS support */
-#define SRV_TLS       0x0800
+/* this is a voluntary standard flag to request TLS support */
+#define SRV_TLS            0x0800
+/* this is a voluntary standard flag to request asynchronous behavior */
+#define SRV_ASYNC_ACCEPT   0x0200 /* the accept() will be performed on a separate thread */
+#define SRV_ASYNC_PROCESS  0x0100 /* recv/send for client connections on a separate thread */
 
 /* these flags are global and respected by the default socket server */
 #define SRV_IPV6      0x1000 /* use IPv6 */
@@ -21,6 +24,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -96,19 +100,20 @@ struct server {
 	send_fn_t send_resp;  /* send response */
 	cbuf_fn_t send;       /* direct send */
 	buf_fn_t  recv;       /* direct receive */
-    fork_fn_t fork;       /* fork */
+	fork_fn_t fork;       /* fork */
+	conn_fn_t process;    /* processing iteration */
+	conn_fn_t conn_fin;   /* connection finalizer */
 	srv_fn_t  fin;        /* optional server finalization */
 	struct server *parent;/* parent server - used only by multi-layer servers */
 	void   *aux;          /* auxiliary data; if used, you may want to set fin above */
 };
 
-/* this flag can be passed to create_server for an IP socket to modify the behavior */
-#define LSM_IP_LOCAL 1 /* bind to loopback address only */
-#define LSM_IPV6     2 /* use IPv6 (if available) */
-
 server_t *create_server(int port, const char *localSocketName, int localSocketMode, int flags);
 int add_server(server_t *srv);
 int rm_server(server_t *srv);
+
+/* creates a virtual server that is used to accept connections */
+server_t *create_accept_server(server_t *srv);
 
 /* server stacks */
 typedef struct server_stack server_stack_t;

@@ -321,6 +321,18 @@ static void sigHandler(int i) {
 }
 
 sig_fn_t old_HUP = sig_not_set, old_TERM = sig_not_set, old_INT = sig_not_set;
+sig_fn_t old_PIPE = sig_not_set;
+
+static void block_SIGPIPE(void) {
+	if (old_PIPE == sig_not_set) old_PIPE = signal(SIGPIPE, SIG_IGN);
+}
+
+static void restore_SIGPIPE(void) {
+	if (old_PIPE != sig_not_set) {
+		signal(SIGPIPE, old_PIPE);
+		old_PIPE = sig_not_set;
+	}
+}
 
 static void setup_signal_handlers(void) {
 	if (old_HUP == sig_not_set)  old_HUP  = signal(SIGHUP,  sigHandler);
@@ -361,6 +373,45 @@ static int RS_fork(client_connection_t *arg) {
 }
 #endif
 
+static void accept_process(client_connection_t *srv_conn) {
+	/* we may not know the size of args since servers may
+	   choose to add fileds, so allocate 1k which is safe */
+	client_connection_t *conn = (client_connection_t*)calloc(CLIENT_CONNECTION_ALLOC_SIZE, 1);
+	if (!conn) {
+		ulog_error("Unable to allocate memory for a new connection");
+		return;
+	}
+	server_t *srv = srv_conn->info.srv;
+	socklen_t al = sizeof(conn->info.sa);
+#ifndef WIN32
+	if (srv->unix_socket) {
+		al = sizeof(conn->info.su);
+		conn->info.s = accept(srv_conn->info.s, (SA*)&(conn->info.su), &al);
+	} else
+#endif
+		conn->info.s = accept(srv_conn->info.s, (SA*)&(conn->info.sa), &al);
+	if (conn->info.s == INVALID_SOCKET) {
+		ulog_error("accept failed: %s", strerror(errno));
+		free(conn);
+		return;
+	}
+	conn->info.srv = srv->parent;
+	accepted_server(conn);
+	DBG(ulog_info("accepted connection for server %p (async, flags 0x%x), new socket %d, calling connected",
+				  (void*) srv->parent, srv->parent->flags, conn->info.s));
+	conn->info.srv->connected(conn);
+}
+
+server_t *create_accept_server(server_t *srv) {
+	server_t *asrv = (server_t*) calloc(sizeof(server_t), 1);
+	if (!asrv)
+		return asrv;
+	asrv->unix_socket = srv->unix_socket;
+	asrv->process = accept_process;
+	asrv->parent = srv;
+	return asrv;
+}
+
 void serverLoop(void) {
     struct timeval timv;
     int selRet = 0;
@@ -369,6 +420,7 @@ void serverLoop(void) {
 	begin_pool("serverLoop");
 
 	setup_signal_handlers();
+	block_SIGPIPE();
 
     while(active && servers) { /* main serving loop */
 		int i;
@@ -383,7 +435,7 @@ void serverLoop(void) {
 		timv.tv_sec = 0; timv.tv_usec = 500000;
 		FD_ZERO(&readfds);
 		for (i = 0; i < servers; i++)
-			if (server[i])
+			if (server[i] && !(server[i]->flags & SRV_ASYNC_ACCEPT))
 				{
 					int ss = server[i]->ss;
 					if (ss > maxfd)
@@ -462,6 +514,8 @@ void serverLoop(void) {
 			} /* severs loop */
 		} /* select */
     } /* end while(active) */
+
+	restore_SIGPIPE();
 	end_pool();
 }
 
@@ -503,14 +557,13 @@ int prepare_child(client_connection_t *args) {
 
     parentPID = getppid();
     close_all_srv_sockets(); /* close all server sockets */
+#endif
 
 #ifdef CAN_TCP_NODELAY
     {
      	int opt = 1;
         setsockopt(args->info.s, IPPROTO_TCP, TCP_NODELAY, (const char*) &opt, sizeof(opt));
     }
-#endif
-
 #endif
 
 	return 0;
