@@ -65,11 +65,11 @@ static char *ulog_path;
 static int   ulog_dcol, ulog_port = 0;
 
 static char hn[512];
-static char buf[4096];
-static char ts[64];
-static unsigned int buf_pos, buf_preamble;
+static __thread char buf[4096];
+static __thread char ts[64];
+static __thread unsigned int buf_pos, buf_preamble, buf_level;
 #ifdef ULOG_MICROTIME
-static double time0, timeN;
+static __thread double time0, timeN;
 #endif
 #endif
 /* RFC5424 limits app to 48 chars */
@@ -152,6 +152,7 @@ void ulog_begin(int level) {
 	level = 7;
     if (level < 0)
 	level = 0;
+    buf_level = level;
 
     {
 	struct tm *stm;
@@ -199,6 +200,9 @@ void ulog_add(const char *format, ...) {
 void ulog_end(void) {
 #if defined (RSERV_DEBUG) || defined (ULOG_STDERR)
     buf[buf_pos] = 0;
+#ifdef ULOG_MAX_LEVEL
+    if (buf_level <= ULOG_MAX_LEVEL)
+#endif
 #ifdef ULOG_SHORT
     fprintf(stderr, "ULOG: %s\n", buf + buf_preamble);
 #else
