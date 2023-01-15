@@ -4,7 +4,7 @@
 #include <poll.h>
 #include <pthread.h>
 
-#include <stdio.h>
+#include <string.h>
 
 struct client_connection {
     /* common information for all connections */
@@ -21,11 +21,23 @@ typedef struct async_conn {
     int state;
 } async_conn;
 
+struct async_job {
+    pthread_t thread;
+    pthread_attr_t thread_attr;
+};
+
+typedef struct async_job_list {
+    size_t n, alloc;
+    async_job *job[1];
+} async_job_list;
+
 struct async_queue {
     async_conn *head, *tail;
     pthread_mutex_t mux;
     pthread_cond_t  cond;
-    pthread_t poll_thread;
+    async_job *poll_job;
+    async_job_list *process_jobs;
+
     nfds_t pf_alloc;
     int n;
     int pfd[2];
@@ -44,12 +56,32 @@ async_queue *async_queue_new(void) {
     q->pf_alloc = max_pf;
     q->pf = q->pf_;
     q->n = 0;
+    q->poll_job = 0;
+    q->process_jobs = 0;
     pipe(q->pfd);
     q->active = 1;
     pthread_mutex_init(&(q->mux), 0);
     pthread_cond_init(&(q->cond), 0);
     DBG(ulog_info("async_queue_new: create new queue %p", (void*) q));
     return q;
+}
+
+static async_job_list *async_job_list_ensure(async_job_list *orig, int alloc) {
+    async_job_list *njl = 0;
+    int real_alloc = orig ? (alloc * 2) : (alloc < 16 ? 16 : alloc);
+    /* if orig has the space, nothing to do */
+    if (orig && orig->alloc <= alloc)
+	return orig;
+    njl = (async_job_list*) malloc(sizeof(async_job_list) + real_alloc * sizeof(async_job));
+    if (!njl)
+	return 0;
+    if (orig) { /* copy all existing entries */
+	memcpy(njl, orig, sizeof(async_job_list) + orig->alloc * sizeof(async_job));
+	free(orig);
+    } else
+	njl->n = 0;
+    njl->alloc = real_alloc;
+    return njl;
 }
 
 static int async_queue_add_(async_queue *q, client_connection_t *conn, int lock) {
@@ -70,29 +102,8 @@ static int async_queue_add_(async_queue *q, client_connection_t *conn, int lock)
 	q->tail = ac;
     }
     q->n++;
-    {
-	/* FIXME: the polling thread is signaling workers which
-	   connections are ready to go, but if there is a new
-	   connection, the poll() call will not know about it
-	   and time out. */
-#if 0
-	struct pollfd pf;
-	int pr;
-	pf.fd = conn->info.s;
-	pf.events = POLLIN;
-	//if ((pr = poll(&pf, 1, 0)) > 0)
-	pr = poll(&pf, 1, 0);
-	ac->state |= ACS_READY;
-	ulog_error("poll on new connection (%d) returned %d", pf.fd, pr);
-	pthread_cond_signal(&(q->cond));
-#else
-	//fprintf(stderr, "signal new connection\n");
-	//fprintf(stderr, "write = %d\n",
-	write(q->pfd[1], "", 1);
-	//	if (q->poll_thread)
-	//  pthread_kill(q->poll_thread, SIGUSR1);
-#endif
-    }
+
+    write(q->pfd[1], "", 1);
 
     if (lock) pthread_mutex_unlock(&(q->mux));
     return 0;
@@ -198,27 +209,6 @@ void async_queue_poll(async_queue *q, double timeout) {
     }
 }
 
-void async_signal_ready(async_queue *q, client_connection_t *conn, int lock) {
-    if (!q)
-	return;
-
-    if (lock)
-	pthread_mutex_lock(&(q->mux));
-    async_conn *c = q->head;
-    while (c && c->conn != conn)
-	c = c->next;
-    if (c && c->conn->info.s != -1) {
-	struct pollfd pf;
-	pf.fd = c->conn->info.s;
-	pf.events = POLLIN;
-	if (poll(&pf, 1, 0) > 0)
-	    c->state |= ACS_READY;
-	pthread_cond_signal(&(q->cond));
-    }
-    if (lock)
-	pthread_mutex_unlock(&(q->mux));
-}
-
 /* picks the first ready connecton and calls process() on it.
    if none are ready, waits up to timeout for one to be ready */
 void async_queue_process(async_queue *q, double timeout) {
@@ -273,19 +263,48 @@ void async_queue_process(async_queue *q, double timeout) {
     }
 }
 
+void async_set_name(const char *name) {
+#ifdef __APPLE__
+    pthread_setname_np(name);
+#else
+    pthread_setname_np(pthread_self(), name);
+#endif
+}
+
 void *async_job_process_queue(void *par) {
     async_queue *q = (async_queue*) par;
-    DBG(ulog_debug("async_job_process_queue(%p): starting loop", par));
+    char name[16] = "aq_proc_000";
+    pthread_mutex_lock(&(q->mux));
+    if (q->process_jobs) { /* this is mostly vain, but we find our place in the list */
+	int i = 0, n = q->process_jobs->n;
+	pthread_t tself = pthread_self();
+	while (i < n) {
+	    if (q->process_jobs->job[i] && q->process_jobs->job[i]->thread == tself)
+		break;
+	    i++;
+	}
+	if (i >= n)
+	    name[7] = 0;
+	else {
+	    name[10] = (i % 10) + '0';
+	    name[9] = ((i / 10) % 10) + '0';
+	    name[8] = ((i / 100) % 10) + '0';
+	}
+    }
+    pthread_mutex_unlock(&(q->mux));
+    async_set_name(name);
+    DBG(ulog_debug("async_job_process_queue(%p): starting loop in thread %s", par, name));
     while (q && q->active) {
 	async_queue_process(q, 1.0);
     }
-    DBG(ulog_debug("async_job_process_queue(%p): ending loop", par));   
+    DBG(ulog_debug("async_job_process_queue(%p): ending loop for thread %s", par, name));
     return par;
 }
 
 void *async_job_poll_queue(void *par) {
     async_queue *q = (async_queue*) par;
     DBG(ulog_debug("async_job_poll_queue(%p): starting loop", par));
+    async_set_name("poll_queue");
     while (q && q->active) {
 	async_queue_poll(q, 1.0);
     }
@@ -297,11 +316,6 @@ void async_queue_stop(async_queue *q) {
     if (q)
 	q->active = 0;
 }
-
-struct async_job {
-    pthread_t thread;
-    pthread_attr_t thread_attr;
-};
 
 async_job *async_run(void * (thr)(void *), void *par) {
     async_job *job = (async_job*) malloc(sizeof(async_job));
@@ -319,7 +333,39 @@ async_job *async_run(void * (thr)(void *), void *par) {
 }
  
 async_job *async_queue_start_poll_thread(async_queue *q) {
-     async_job *j = async_run(async_job_poll_queue, q);
-     q->poll_thread = j->thread;
-     return j;
- }
+    pthread_mutex_lock(&(q->mux));
+    /* FIXME: we refuse to start a second thread.
+       This is likely a non-issue, but in theory if one wanted
+       to re-start it due to some failure this could be of interest. */
+    if (q->poll_job)
+	return q->poll_job;
+    async_job *j = async_run(async_job_poll_queue, q);
+    q->poll_job = j;
+    pthread_mutex_unlock(&(q->mux));
+    return j;
+}
+
+int async_queue_set_process_threads(async_queue *q, int n) {
+    int res = -1;
+    if (!q)
+	return -1;
+    pthread_mutex_lock(&(q->mux));
+    if (q->process_jobs && q->process_jobs->n >= n) {
+	pthread_mutex_unlock(&(q->mux));
+	return q->process_jobs->n;
+    }
+    async_job_list *l = async_job_list_ensure(q->process_jobs, n);
+    if (!l) {
+	pthread_mutex_unlock(&(q->mux));
+	return -1;
+    }
+    q->process_jobs = l;
+    while (q->process_jobs->n < n) {
+	async_job *j = async_run(async_job_process_queue, q);
+	if (!j) break;
+	q->process_jobs->job[q->process_jobs->n++] = j;
+    }
+    res = q->process_jobs->n;
+    pthread_mutex_unlock(&(q->mux));
+    return res;
+}

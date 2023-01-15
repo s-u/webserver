@@ -918,8 +918,6 @@ static void http_server_fin(server_t *srv) {
 		free(srv->aux);
 }
 
-static int http_threads = 0;
-
 int http_start_threads(int n) {
 	if (!http_queue) {
 		http_queue = async_queue_new();
@@ -927,12 +925,7 @@ int http_start_threads(int n) {
 			return -1;
 		async_queue_start_poll_thread(http_queue);
 	}
-	/* create processing threads */
-	while (http_threads < n) {
-		async_run(async_job_process_queue, http_queue);
-		http_threads++;
-	}
-	return http_threads;
+	return async_queue_set_process_threads(http_queue, n);
 }
 
 #ifdef NO_WEBSOCKETS
