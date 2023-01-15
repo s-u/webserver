@@ -127,13 +127,12 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     begin_pool("r_inline_handler");
 
     path = req->url;
-    DBG(ulog_debug("match '%s' and '%s'", path, hs->prefix));
+    DBG(ulog_debug("r_inline: match '%s' and '%s'", path, r->prefix));
     if (strncmp(r->prefix, path, r->prefix_len)) {
 	end_pool();
 	return 0;
     }
-
-    DBG(ulog_debug(" - matched, trying '%s'", http_tmp));
+    DBG(ulog_debug("r_inline: matched"));
 
     {
 	SEXP what = PROTECT(lang2(r->sFun, mkString(req->url))), x;
