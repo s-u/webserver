@@ -13,6 +13,7 @@ int  async_queue_add(async_queue *q, client_connection_t *conn);
 int  async_queue_add_inside(async_queue *q, client_connection_t *conn);
 void async_queue_process(async_queue *q, double timeout);
 void async_queue_stop(async_queue *q);
+int async_queue_finish(async_queue *q);
 
 /* compatible to be passed to async_run() */
 void *async_job_process_queue(void *par);

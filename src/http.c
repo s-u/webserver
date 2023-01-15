@@ -928,6 +928,12 @@ int http_start_threads(int n) {
 	return async_queue_set_process_threads(http_queue, n);
 }
 
+int http_finish_threads() {
+	int res = async_queue_finish(http_queue);
+	http_queue = 0;
+	return res;
+}
+
 #ifdef NO_WEBSOCKETS
 server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, void *ws_connected)
 #else
