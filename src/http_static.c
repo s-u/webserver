@@ -11,6 +11,7 @@
 #include "http_date.h"
 #include "http_static.h"
 #include <sys/stat.h>
+#define  NEED_STRNSTR
 #include "bsdcmpt.h"
 
 #include <string.h>

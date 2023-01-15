@@ -13,6 +13,7 @@
 #else
 #define MTIME(X) (X).st_mtime
 
+#ifdef NEED_STRNSTR
 /* not part of Linux/POSIX so implement it ... */
 static const char *strnstr(const char *haystack, const char *needle, size_t len) {
     const char *eohs = haystack + len;
@@ -22,6 +23,7 @@ static const char *strnstr(const char *haystack, const char *needle, size_t len)
         if (!memcmp(haystack, needle, nl)) return haystack; else haystack++;
     return 0;
 }
+#endif
 #endif
 
 #endif
