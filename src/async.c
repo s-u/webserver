@@ -103,6 +103,16 @@ int  async_queue_signal_ready(async_queue *q, client_connection_t *conn) {
     return 0;
 }
 
+void async_queue_begin(async_queue *q) {
+    if (q)
+	pthread_mutex_lock(&(q->mux));
+}
+
+void async_queue_end(async_queue *q) {
+    if (q)
+	pthread_mutex_unlock(&(q->mux));
+}
+
 static int async_queue_add_(async_queue *q, client_connection_t *conn, int lock) {
     async_conn *ac;
     if (!conn)
@@ -181,7 +191,7 @@ static int async_queue_setup_poll(async_queue *q, int rm) {
 		free(me);
 		continue;
 	    }
-	} else if (c->conn->info.s == FD_VIRTUAL) {
+	} else if (c->conn->info.s != FD_VIRTUAL) {
 	    q->pf[n].fd = c->conn->info.s;
 	    q->pf[n].events = POLLIN;
 	    n++;

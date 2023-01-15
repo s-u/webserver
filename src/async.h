@@ -40,4 +40,10 @@ async_job *async_queue_start_poll_thread(async_queue *q);
    the actual number of threads */
 int async_queue_set_process_threads(async_queue *q, int n);
 
+/* enter and leave critical region. You MUST guarantee that
+   the calls are always matched and they MUST NOT nest.
+   Experimental, for expert use only, use with care. */
+void async_queue_begin(async_queue *q);
+void async_queue_end(async_queue *q);
+
 #endif
