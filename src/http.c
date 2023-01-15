@@ -930,8 +930,10 @@ int http_start_threads(int n) {
 
 int http_finish_threads() {
 	int res = async_queue_finish(http_queue);
-	free(http_queue);
-	http_queue = 0;
+	if (!res) { /* on success release the queue */
+		async_queue_free(http_queue);
+		http_queue = 0;
+	}
 	return res;
 }
 

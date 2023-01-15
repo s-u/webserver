@@ -95,6 +95,19 @@ static int async_queue_add_(async_queue *q, client_connection_t *conn, int lock)
     ac->state = 0;
     if (lock) pthread_mutex_lock(&(q->mux));
 
+    /* in the unlikely case of too many connections we re-allocate the poll list */
+    if (q->n >= q->pf_alloc) {
+	size_t nalloc = q->pf_alloc * 2;
+	struct pollfd *npf = (struct pollfd *) malloc(sizeof(struct pollfd) * nalloc);
+	if (!npf) {
+	    if (lock) pthread_mutex_unlock(&(q->mux));
+	    return -1;
+	}
+	if (q->pf != q->pf_)
+	    free(q->pf);
+	q->pf = npf;
+    }
+
     if (q->active) {
 	if (!q->head)
 	    q->head = q->tail = ac;
@@ -176,26 +189,19 @@ void async_queue_poll(async_queue *q, double timeout) {
     r = poll(q->pf, n, (int)(timeout * 1000.0));
     DBG(ulog_debug("async_queue_poll(%p): poll(%d, %f) -> %d", (void*) q, n, timeout, r));
 
-#if 0
-    {
-	fprintf(stderr, "async_queue_poll(%p): poll(%d, %f) -> %d  ", (void*) q, n, timeout, r);
-	int ii = 0;
-	while (ii < n) { fprintf(stderr, "%c", (q->pf[ii].revents) ? 'X' : '.'); ii++; }
-	fprintf(stderr, "\n");
-    }
-#endif
     if (r > 0) {
 	i = 0;
-	/* we rely on the fact that no one can remove from the queue, so the poll list
-	   must be always the first n connections - that way we don't have to keep
-	   another list. We flag all ready entries and then signal other threads to
-	   process. */
 	pthread_mutex_lock(&(q->mux));
+	/* the first entry in the fds is always the wake-up pipe */
 	if (q->pf[i].revents) {
 	    char xx[4];
 	    read(q->pf[i].fd, xx, 4);
 	}
 	i++;
+	/* we rely on the fact that no one can remove from the queue, so the poll list
+	   must be always the first n connections - that way we don't have to keep
+	   another list. We flag all ready entries and then signal other threads to
+	   process. */
 	async_conn *c = q->head;
 	while (c && i < n) {
 	    if (!(c->state & ACS_CLOSED)) {
@@ -375,6 +381,16 @@ int async_queue_finish(async_queue *q) {
     }
     pthread_mutex_unlock(&(q->mux));
     return 0;
+}
+
+void async_queue_free(async_queue *q) {
+    if (q) {
+	if (q->pf != q->pf_)
+	    free(q->pf);
+	pthread_mutex_destroy(&(q->mux));
+	pthread_cond_destroy(&(q->cond));
+	free(q);
+    }
 }
 
 async_job *async_run(void * (thr)(void *), void *par) {
