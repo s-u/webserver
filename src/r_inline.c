@@ -9,6 +9,8 @@
 #include "http.h"
 #include "http_tools.h"
 #include "http_date.h"
+#include "r_inline.h"
+#include "async.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -31,6 +33,40 @@ void r_inline_free(r_inline *obj) {
     if (obj->sFun && obj->sFun != R_NilValue)
 	R_ReleaseObject(obj->sFun);
     free(obj);
+}
+
+/* We use an (empty) queue to synchronize calls into R.
+   Note that the evaluation will still happen in the 
+   process thread, but the mutex guarantees that it is always
+   done in a synchronized fashion. Because the calls are
+   on different threads, we have to disable the R's stack
+   limit checks since they won't work.
+   Note that this works mainly because we know that our
+   accept code is running on the main thread, which will
+   never enter R.
+   We could improve this by starting the server loop in
+   a spearate thread and then use the r_queue to schedule
+   calls into the main loop, but that would mean additonal
+   thread jumping, because we still want to separate I/O
+   threads. */
+
+static async_queue *r_queue;
+
+extern uintptr_t R_CStackLimit;
+
+void r_inline_setup(int flags) {
+    if ((flags & RIF_ASYNC) && !r_queue) {
+	r_queue = async_queue_new();
+	R_CStackLimit = -1;
+    }
+}
+
+void r_inline_end() {
+    if (r_queue) {
+	async_queue_finish(r_queue);
+	async_queue_free(r_queue);
+	r_queue = 0;
+    }
 }
 
 r_inline *r_inline_entry(const char *prefix, SEXP sFun, int flags) {
@@ -181,6 +217,8 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     }
     DBG(ulog_debug("r_inline: matched"));
 
+    if (r_queue)
+	async_queue_begin(r_queue);
     {
 	/* original has: (path, query, body, headers) */
 	SEXP sPath     = PROTECT(mkString(req->url));
@@ -254,6 +292,8 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 	if (e.traceback)
 	    R_ReleaseObject(e.traceback);
     }
+    if (r_queue)
+	async_queue_end(r_queue);
     end_pool();
     return 1;
 }
