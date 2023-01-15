@@ -117,6 +117,53 @@ static void Rserve_eval_(void *arg) {
     R_ExecWithCleanup(R_eval_do, arg, Rserve_eval_cleanup, arg);
 }
 
+/* collect (unnamed) string R headers into one, freshly allocated
+   char* string. Empty lines (elements) are silently removed.
+   Caller owns the result (which can be NULL if there is no
+   [valid] content). */
+static char *R_headers2cstr(SEXP sHeaders) {
+    char *res, *dst;
+    size_t len = 0;
+    int i = 0, n = LENGTH(sHeaders);
+    while (i < n) {
+	const char *c = CHAR(STRING_ELT(sHeaders, i++));
+	if (*c && *c != '\r' && *c == '\n') /* empty headers are illegal */
+	    len += strlen(c) + 2;
+    }
+    if (!len)
+	return 0;
+    dst = res = malloc(len + 1);
+    if (!res) {
+	ulog_error("unable to allocate memory for headers");
+	return 0;
+    }
+    i = 0;
+    while (i < n) {
+	const char *c = CHAR(STRING_ELT(sHeaders, i++));
+	if (*c && *c != '\r' && *c == '\n') {
+	    size_t l = strlen(c);
+	    memcpy(dst, c, l);
+	    dst += l;
+	    /* all header lines must be \r\n terminated */
+	    if (dst[-1] != '\n') {
+		*(dst++) = '\r';
+		*(dst++) = '\n';
+	    }
+	}
+    }
+    *dst = 0;
+    return res;
+}
+
+static SEXP buf2raw(const char *buf, size_t len) {
+    if (buf && len) {
+	SEXP r = allocVector(RAWSXP, len);
+	memcpy(RAW(r), buf, len);
+	return r;
+    }
+    return R_NilValue;
+}
+
 int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     const char *path;
     r_inline *r = (r_inline*) user;
@@ -135,12 +182,21 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     DBG(ulog_debug("r_inline: matched"));
 
     {
-	SEXP what = PROTECT(lang2(r->sFun, mkString(req->url))), x;
+	/* original has: (path, query, body, headers) */
+	SEXP sPath     = PROTECT(mkString(req->url));
+	SEXP sQuery    = PROTECT(req->query ? mkString(req->query) : R_NilValue);
+	SEXP sBody     = PROTECT(buf2raw(req->body, req->body_len));
+	SEXP sHdr      = PROTECT(buf2raw(req->headers, req->headers ? strlen(req->headers) : 0));
+	SEXP sMethod   = PROTECT(mkString(req->method));
+	/* fragments are not sent even though they are allowed, so for now let's ignore them
+	   SEXP sFragment = PROTECT(req->fragment ? mkString(req->fragment) : R_NilValue); */
+	SEXP what      = PROTECT(LCONS(r->sFun, list5(sPath, sQuery, sBody, sHdr, sMethod))), x;
 	rs_eval_t e = { what, R_GlobalEnv, 0, 0, 0, 0 };
 	int ter = R_ToplevelExec(Rserve_eval_, &e);
-	UNPROTECT(1);
+	UNPROTECT(6);
 	do {
 	    if (!ter || !e.last) {
+		/* we have (possibly) more info: e.traceback */
 		const char *errmsg = R_curErrorBuf();
 		res->err = strdup(errmsg);
 		break;
@@ -156,12 +212,13 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 		if (LENGTH(x) > 1) {
 		    SEXP sCT = VECTOR_ELT(x, 1); /* second element is content type if present */
 		    if (TYPEOF(sCT) == STRSXP && LENGTH(sCT) > 0) {
-			/* FIXME: mem mgmt of ct? */
+			if (res->content_type)
+			    free(res->content_type);
 			res->content_type = strdup(CHAR(STRING_ELT(sCT, 0)));
 			if (LENGTH(x) > 2) { /* third element is headers vector */
-			    //sHeaders = VECTOR_ELT(x, 2);
-			    //if (TYPEOF(sHeaders) != STRSXP)
-			    //    sHeaders = R_NilValue;
+			    SEXP sHeaders = VECTOR_ELT(x, 2);
+			    if (TYPEOF(sHeaders) == STRSXP && LENGTH(sHeaders) > 0)
+				res->headers = R_headers2cstr(sHeaders);
 			    if (LENGTH(x) > 3) /* fourth element is HTTP code */
 				res->code = asInteger(VECTOR_ELT(x, 3));
 			}
