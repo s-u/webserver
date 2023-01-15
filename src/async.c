@@ -70,13 +70,13 @@ static async_job_list *async_job_list_ensure(async_job_list *orig, int alloc) {
     async_job_list *njl = 0;
     int real_alloc = orig ? (alloc * 2) : (alloc < 16 ? 16 : alloc);
     /* if orig has the space, nothing to do */
-    if (orig && orig->alloc <= alloc)
+    if (orig && orig->alloc >= alloc)
 	return orig;
-    njl = (async_job_list*) malloc(sizeof(async_job_list) + real_alloc * sizeof(async_job));
+    njl = (async_job_list*) malloc(sizeof(async_job_list) + real_alloc * sizeof(async_job*));
     if (!njl)
 	return 0;
     if (orig) { /* copy all existing entries */
-	memcpy(njl, orig, sizeof(async_job_list) + orig->alloc * sizeof(async_job));
+	memcpy(njl, orig, sizeof(async_job_list) + orig->alloc * sizeof(async_job*));
 	free(orig);
     } else
 	njl->n = 0;
