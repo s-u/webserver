@@ -16,13 +16,22 @@
 #define PF_REWRITE_STOP  1 /* rewrite rule is reqeusting no more rewrites */
 #define PF_AUTHORIZED    2 /* authorization handler succeeded */
 
-/* URL: <scheme>:[//<authority>]<path>[?<query>][#<fragment>] */
+/* URL: <scheme>:[//<authority>]<path>[?<query>][#<fragment>]
+
+   NOTE: the request elements may NOT be modified by handlers with
+   the exception of using http_request_set_url() which is intended for
+   rewrite handlers that can modify the URL parts.
+
+   Also fragment is typically not used by URLs in HTTP requests but kept
+   only on the client side. We keep it here for completeness enabling some
+   interesting protocol uses, but most handlers will ignore it. */
 typedef struct {
-    char  *url;      /* path */
+    char  *url;      /* actually path */
     char  *body;
     size_t body_len;
     char  *query;
     char  *fragment;
+    char  *content_type;
     char  *headers;
     char  *auth;
     double date;

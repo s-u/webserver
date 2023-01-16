@@ -331,6 +331,7 @@ static void process_request(client_connection_t *c)
 		memcpy(req.method, c->method8, 7);
 		req.method[7] = 0;
 		req.processing_flags = 0;
+		req.content_type = c->content_type;
 		c->aux->http_handler(&req, &res);
 		web_log(&req, &res);
 		if (headers) {
@@ -735,7 +736,11 @@ static void http_input_iteration(client_connection_t *c) {
 							}
 							if (!strcmp(bol, "content-type")) {
 								char *l = k;
-								while (*l) { if (*l >= 'A' && *l <= 'Z') *l |= 0x20; l++; }
+								/* lowercase only the part up to ; */
+								while (*l && *l != ';') {
+									if (*l >= 'A' && *l <= 'Z') *l |= 0x20;
+									l++;
+								}
 								c->attr |= CONTENT_TYPE;
 								if (c->content_type) free(c->content_type);
 								c->content_type = strdup(k);
