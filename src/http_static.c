@@ -71,6 +71,7 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
     int found = 0;
     /* buffer used for path processing in the handler. */
     char http_tmp[512];
+    char range_buf[128];
 
     /* this should never happen, but just to be safe ... */
     if (!req || !req->url || !hs) return 0;
@@ -121,8 +122,8 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
 	    return 0;
     }
 
-    /* check for conditional GET */
     if (req->headers) {
+	/* check for conditional GET */
 	const char *if_mod = get_header(req, "if-modified-since");
 	if (if_mod) {
 	    double since = http2posix(if_mod);
@@ -164,6 +165,42 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
 	}
     }
 
+    if (req->headers && st.st_size) {
+	/* check for Range request */
+	const char *range = get_header(req, "range");
+	if (range && !strncmp(range, "bytes", 5)) { /* we only support byte ranges */
+	    const char *v = range + 5;
+	    while (*v == ' ' || *v == '\t') v++;
+	    /* we only support a single range that has a start */
+	    if (*v >= '0' && *v <= '9') {
+		size_t start = 0, end = st.st_size;
+		while (*v >= '0' && *v <= '9')
+		    start = (start * (size_t)10) + ((size_t) (*(v++) - '0'));
+		if (*v == '-') {
+		    v++;
+		    if (*v >= '0' && *v <= '9') {
+			end = 0;
+			while (*v >= '0' && *v <= '9')
+			    end = (end * (size_t)10) + ((size_t) (*(v++) - '0'));
+			end++; /* we use end as past */
+		    }
+		    if (end > st.st_size)
+			end = st.st_size;
+		    /* only valid case */
+		    if (start < end) {
+			res->flags |= RF_USE_RANGE;
+			res->range_start = start;
+			res->range_end = end;
+			res->code = 206;
+			snprintf(range_buf, sizeof(range_buf),
+				 "Content-Range: bytes %ld-%ld/%ld\r\n",
+				 (long) start, (long) (end - 1), (long) st.st_size);
+		    }
+		}
+	    }
+	}
+    }
+
     /* otherwise this was handled and http_tmp has the full name */
     res->payload = strdup(http_tmp);
     res->payload_type = PAYLOAD_FILE;
@@ -174,9 +211,10 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
     ts = (double) time(0);
     {
 	char date[32];
-	snprintf(http_tmp, sizeof(http_tmp), "Last-Modified: %s\r\nCache-Control: no-cache\r\n%s",
+	snprintf(http_tmp, sizeof(http_tmp), "Last-Modified: %s\r\nCache-Control: no-cache\r\n%s%s",
 		 posix2http((MTIME(st) > ts) ? ts : MTIME(st), date),
-		 append_headers ? append_headers : ""
+		 append_headers ? append_headers : "",
+		 (res->flags & RF_USE_RANGE) ? range_buf : ""
 		 );
     }
     res->headers = strdup(http_tmp);

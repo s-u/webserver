@@ -43,6 +43,11 @@ typedef struct {
 #define PAYLOAD_FILE     1 /* file */
 #define PAYLOAD_TEMPFILE 2 /* file which will be deleted once served */
 
+#define RF_USE_RANGE  1  /* if set the result ranges are populated */
+#define RF_IS_SUBSET  2  /* if set the the result handler should assume
+			    that the payload already reflects the requested
+			    range (otherwise it will extract the range) */
+
 /* all members are set to 0 before a handler is called.
    non-NULL pointers will be free()d once the request is
    processed so do not use static buffers. */
@@ -50,11 +55,13 @@ typedef struct {
     char  *err;
     char  *payload;
     size_t payload_len;
+    size_t range_start, range_end;
     int    payload_type;   /* see PAYLOAD_xx constants above */
     char  *content_type; /* defaults to "text/html" if NULL */
     char  *headers;
     double date; /* 0=now, <0 do not send Date: header */
-    int code; /* 0 => 200 */
+    int    code; /* 0 => 200 */
+    int    flags;
 } http_result_t;
 
 typedef void (*http_handler_fn_t)(http_request_t *req, http_result_t *res);

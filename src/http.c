@@ -170,6 +170,7 @@ static void conn_request_done(client_connection_t *c) {
 static void http_close(client_connection_t *conn) {
 	if (conn->info.ssl)
 		close_tls(conn);
+	DBG(ulog_debug("http_close %p (%d)", (void*) conn, conn->info.s));
 	if (conn->info.s != INVALID_SOCKET) {
 #if 0 /* attempt to avoid TIME_WAIT, but failed */
 		char xx[4];
@@ -319,7 +320,7 @@ static void process_request(client_connection_t *c)
     uri_decode(c->url); /* decode the path part */
     {   /* construct "try(httpd(url, query, body, headers), silent=TRUE)" */
 		http_request_t req;
-		http_result_t res = { 0, 0, 0, 0, 0, 0 };
+		http_result_t res = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 		buf_t *headers = c->headers ? collect_buffers(c->headers) : 0;
 		req.url = c->url;
 		req.body = c->body;
@@ -431,10 +432,15 @@ static void process_request(client_connection_t *c)
 						end_pool();
 						return;
 					}
-					fseek(f, 0, SEEK_END);
-					/* FIXME: long is only 32-bit on Windows */
-					fsz = ftell(f);
-					fseek(f, 0, SEEK_SET);
+					if ((res.flags & RF_USE_RANGE) && !(res.flags & RF_IS_SUBSET)) {
+						fseek(f, res.range_start, SEEK_SET);
+						fsz = res.range_end - res.range_start;
+					} else {
+						fseek(f, 0, SEEK_END);
+						/* FIXME: long is only 32-bit on Windows */
+						fsz = ftell(f);
+						fseek(f, 0, SEEK_SET);
+					}
 					sprintf(buf, "Content-Length: %ld\r\n\r\n", fsz);
 					send_response(c, buf, strlen(buf));
 					if (c->method != METHOD_HEAD) {
@@ -484,10 +490,16 @@ static void process_request(client_connection_t *c)
 				if (res.code == 304) /* 304 may NOT send any body and thus no content-length */
 					send_response(c, "\r\n", 2);
 				else {
-					sprintf(buf, "Content-Length: %lu\r\n\r\n", (unsigned long) res.payload_len);
+					size_t payload_start = 0, payload_end = res.payload_len;
+					if ((res.flags & RF_USE_RANGE) && !(res.flags & RF_IS_SUBSET) && res.range_start <= res.range_end) {
+						if (res.range_end <= payload_end)
+							payload_end = res.range_end;
+						if (res.range_start <= payload_end)
+							payload_start = res.range_start;
+					}
 					send_response(c, buf, strlen(buf));
 					if (c->method != METHOD_HEAD)
-						send_response(c, res.payload, res.payload_len);
+						send_response(c, res.payload + payload_start, payload_end - payload_start);
 				}
 				free_res(&res);
 				fin_request(c);
