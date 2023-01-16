@@ -12,6 +12,8 @@
 #include "r_inline.h"
 #include "async.h"
 
+#include "r_http_tools.h"
+
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
@@ -222,10 +224,13 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     {
 	/* original has: (path, query, body, headers) */
 	SEXP sPath     = PROTECT(mkString(req->url));
-	SEXP sQuery    = PROTECT(req->query ? mkString(req->query) : R_NilValue);
+	SEXP sQuery    = PROTECT(req->query ?
+				 ((r->flags & RIF_PARSE_QUERY) ? r_http_parse_query(req->query) : mkString(req->query)) :
+				 R_NilValue);
 	SEXP sBody     = PROTECT(buf2raw(req->body, req->body_len));
 	SEXP sCTS      = Rf_install("content-type");
-	SEXP sHdr      = PROTECT(buf2raw(req->headers, req->headers ? strlen(req->headers) : 0));
+	SEXP sHdr      = PROTECT((r->flags & RIF_PARSE_HEADERS) ? r_http_parse_headers(req->headers, -1) :
+				 buf2raw(req->headers, req->headers ? strlen(req->headers) : 0));
 	SEXP sMethod   = PROTECT(mkString(req->method));
 	if (req->content_type)
 	    Rf_setAttrib(sBody, sCTS, mkString(req->content_type));
@@ -239,6 +244,7 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 	    if (!ter || !e.last) {
 		/* we have (possibly) more info: e.traceback */
 		const char *errmsg = R_curErrorBuf();
+		DBG(ulog_debug("r_inline: evaluation failed with %s", errmsg));
 		res->err = strdup(errmsg);
 		break;
 	    }

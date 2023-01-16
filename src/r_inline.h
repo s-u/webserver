@@ -5,7 +5,13 @@
 
 #include <Rinternals.h>
 
-#define RIF_ASYNC 1
+/* this is not really a flag for the handler, but rather only used
+   in r_inline_setup() */
+#define RIF_ASYNC           1
+
+/* the following are handler flags */
+#define RIF_PARSE_QUERY     2 /* if set, query is a named character vector, otherwise just unparsed string */
+#define RIF_PARSE_HEADERS   4 /* if set, headers are parsed into pairlists, otherwise raw vector */
 
 typedef struct r_inline r_inline;
 
