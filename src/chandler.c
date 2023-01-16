@@ -75,3 +75,15 @@ void free_content_handlers(void) {
     }
     handlers_tail = handlers;
 }
+
+int list_content_handlers(content_handler_t **buf, int count) {
+    content_handler_t *h = handlers;
+    int n = 0;
+    while (h) {
+	if (buf && n < count)
+	    *(buf++) = h;
+	n++;
+	h = h->next;
+    }
+    return n;
+}

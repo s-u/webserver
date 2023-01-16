@@ -1,5 +1,8 @@
 #include "http.h"
 
+/* NOTE: content handlers are global and as such the adding,
+   removal and listing of handlers is not thread-safe! */
+
 /* handlers return 0 if they choose to not handle the request.
    If a handler doesn't choose to handle the request it is not allowed
    to modify req/res.
@@ -22,6 +25,12 @@ content_handler_t *call_content_handlers(http_request_t *req, http_result_t *res
 
 /* remove one handler from the chain */
 void remove_content_handler(content_handler_t *handler);
+
+/* list currently registered handlers.
+   Always returns the number of currently registered handlers.
+   if <buf> is not NULL, it will be filled with the handler pointers
+   up to <count> of them. */
+int list_content_handlers(content_handler_t **buf, int count);
 
 /* release all handlers */
 void free_content_handlers(void);
