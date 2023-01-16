@@ -414,10 +414,18 @@ server_t *create_accept_server(server_t *srv) {
 	return asrv;
 }
 
+void stop_server_loop(void) {
+	/* FIXME: do we need to send a signal?
+	   This is not actually used so far, so we can think about it ... */
+	active = 0;
+}
+
 void serverLoop(void) {
     struct timeval timv;
     int selRet = 0;
     fd_set readfds;
+
+	active = 1; /* starting it means we are active */
 
 	begin_pool("serverLoop");
 
