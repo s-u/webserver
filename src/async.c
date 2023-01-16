@@ -234,9 +234,26 @@ void async_queue_poll(async_queue *q, double timeout) {
 	async_conn *c = q->head;
 	while (c && i < n) {
 	    if (!(c->state & ACS_CLOSED)) {
-		if (q->pf[i].revents)
+		/* we want to signal ready only on connections that are not processing,
+		   because processing can read from the connection and thus the ready
+		   state may become invalid (in fact that is most commonly the case
+		   since that is the point of the processing).
+		   NB that during processing the poll will be spinning until the
+		   processing has cleared the ready state for the socket. However,
+		   we can't really remove processing sockets or else the poll()
+		   would not be woken up by new data on sockets that are being processed.
+		   Put differently, we have no way to distinguish the ready part that
+		   is expected to be pulled by the process vs which will remain for the
+		   next processing iteration. In practice most handlers will read the data
+		   first, clearing the ready state anyway. If the CPU usage by such
+		   spinning polls is really worrying us then we could have the processing
+		   signal on the wake-up pipe - but then we may as well just use libevent
+		   instead if that's what we want to worry about. */
+		if (q->pf[i].revents && !(c->state & ACS_PROCESSING)) {
+		    DBG(ulog_debug("async_queue_poll(%p): connection %p (%d = %d) is ready",
+				   (void*) q, (void*) c->conn, c->conn->info.s, q->pf[i].fd));
 		    c->state |= ACS_READY;
-		else
+		} else
 		    c->state &= ~ACS_READY;
 		i++;
 	    }
@@ -381,6 +398,23 @@ int async_queue_finish(async_queue *q) {
 	if (pthread_join(q->poll_job->thread, &ret))
 	    ulog_error("cannot join poll thread");
     }
+    /* before we can collect process threads we have to
+       close any (non-processing?) connections or else
+       the clients can have us stuck indefinitely */
+    pthread_mutex_lock(&(q->mux));
+    if (q->head || q->tail) {
+	DBG(ulog_debug("async_queue_finish: initiating shutdown on connections"));
+	async_conn *c = q->head;
+	while (c) {
+	    DBG(ulog_debug(" - connection %p (%d), state=%d, shutdown", (void*) c->conn, c->conn->info.s, c->state));
+	    if (c->conn->info.s != INVALID_SOCKET && c->conn->info.s != FD_VIRTUAL)
+		shutdown(c->conn->info.s, SHUT_RD);
+	    /* FIXME: should we tell the connection so it can be more explicit about handling this? */
+	    c = c->next;
+	}
+    }
+    pthread_mutex_unlock(&(q->mux));
+
     if (q->process_jobs) {
 	int i = 0, n = q->process_jobs->n;
 	while (i < n) {
