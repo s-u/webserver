@@ -27,9 +27,10 @@ SEXP r_http_parse_headers(const char *hdrs, int len_spec) {
 	    SEXP htail = 0;
 	    if (c - bol > MAX_HDR_NAME)
 		break;
-	    /* turn header entries into lowercase */
+	    /* turn header entries into lowercase and - into . */
 	    while (bol < c) {
-		*(dst++) = (*bol >= 'A' && *bol <= 'Z') ? (*bol | 0x20) : *bol;
+		*(dst++) = (*bol >= 'A' && *bol <= 'Z') ? (*bol | 0x20) :
+		    ( (*bol == '-') ? '.' : *bol );
 		bol++;
 	    }
 	    *dst = 0;
