@@ -224,8 +224,11 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 	SEXP sPath     = PROTECT(mkString(req->url));
 	SEXP sQuery    = PROTECT(req->query ? mkString(req->query) : R_NilValue);
 	SEXP sBody     = PROTECT(buf2raw(req->body, req->body_len));
+	SEXP sCTS      = Rf_install("content-type");
 	SEXP sHdr      = PROTECT(buf2raw(req->headers, req->headers ? strlen(req->headers) : 0));
 	SEXP sMethod   = PROTECT(mkString(req->method));
+	if (req->content_type)
+	    Rf_setAttrib(sBody, sCTS, mkString(req->content_type));
 	/* fragments are not sent even though they are allowed, so for now let's ignore them
 	   SEXP sFragment = PROTECT(req->fragment ? mkString(req->fragment) : R_NilValue); */
 	SEXP what      = PROTECT(LCONS(r->sFun, list5(sPath, sQuery, sBody, sHdr, sMethod))), x;
