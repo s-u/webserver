@@ -497,6 +497,8 @@ static void process_request(client_connection_t *c)
 						if (res.range_start <= payload_end)
 							payload_start = res.range_start;
 					}
+					sprintf(buf, "Content-Length: %lu\r\n\r\n",
+							(unsigned long) (payload_end - payload_start));
 					send_response(c, buf, strlen(buf));
 					if (c->method != METHOD_HEAD)
 						send_response(c, res.payload + payload_start, payload_end - payload_start);
