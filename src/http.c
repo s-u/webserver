@@ -929,10 +929,14 @@ int http_start_threads(int n) {
 }
 
 int http_finish_threads() {
-	int res = async_queue_finish(http_queue);
-	if (!res) { /* on success release the queue */
-		async_queue_free(http_queue);
-		http_queue = 0;
+	int res = 0;
+	if (http_queue) {
+		int res = async_queue_finish(http_queue);
+		if (!res) { /* on success release the queue */
+			async_queue_free(http_queue);
+			http_queue = 0;
+		} else
+			ulog_error("http_finish_threads: queue finish FAILED, not releasing");
 	}
 	return res;
 }
