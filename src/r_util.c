@@ -1,11 +1,14 @@
+#ifndef NO_R
+
 #include <Rinternals.h>
 
 #include <unistd.h>
 #include <fcntl.h>
 
-SEXP C_std2file(SEXP sFile, SEXP sWhich, SEXP sAppend, SEXP sMode) {
+SEXP C_fds2file(SEXP sFile, SEXP sWhich, SEXP sAppend, SEXP sMode, SEXP sClose) {
     SEXP res;
-    int app = Rf_asInteger(sAppend), mode = Rf_asInteger(sMode);
+    int app = Rf_asInteger(sAppend), mode = Rf_asInteger(sMode),
+	cl  = Rf_asInteger(sClose);
     const char *fn;
     int fd, i = 0;
     if (TYPEOF(sFile) != STRSXP || LENGTH(sFile) != 1)
@@ -19,8 +22,12 @@ SEXP C_std2file(SEXP sFile, SEXP sWhich, SEXP sAppend, SEXP sMode) {
     res = PROTECT(Rf_allocVector(LGLSXP, LENGTH(sWhich)));
     while (i < LENGTH(sWhich)) {
 	LOGICAL(res)[i] = (dup2(fd, INTEGER(sWhich)[i]) != -1);
+	if (cl)
+	    close(INTEGER(sWhich)[i]);
 	i++;
     }
     UNPROTECT(1);
     return res;
 }
+
+#endif

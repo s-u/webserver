@@ -1,6 +1,10 @@
 #ifndef RS_SERVER_H__
 #define RS_SERVER_H__
 
+#ifndef NO_CONFIG_H
+#include "config.h"
+#endif
+
 /* this is a voluntary standard flag to request TLS support */
 #define SRV_TLS            0x0800
 /* this is a voluntary standard flag to request asynchronous behavior */

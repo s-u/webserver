@@ -1,4 +1,10 @@
+#ifndef NO_R
+
 #include "r_http_tools.h"
+
+#ifndef NO_CONFIG_H
+#include "config.h"
+#endif
 
 #include <string.h>
 
@@ -195,3 +201,5 @@ SEXP r_http_parse_query(char *query)
     UNPROTECT(2);
     return res;
 }
+
+#endif

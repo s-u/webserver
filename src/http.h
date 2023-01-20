@@ -1,6 +1,10 @@
 #ifndef HTTP_H__
 #define HTTP_H__
 
+#ifndef NO_CONFIG_H
+#include "config.h"
+#endif
+
 #include "dalloc.h"
 
 #ifdef NO_WEBSOCKETS

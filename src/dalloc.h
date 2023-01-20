@@ -1,6 +1,10 @@
 #ifndef DALLOC_H__
 #define DALLOC_H__
 
+#ifndef NO_CONFIG_H
+#include "config.h"
+#endif
+
 #include <stdlib.h>
 #include <string.h>
 
