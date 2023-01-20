@@ -36,15 +36,21 @@ const char *prefix[8] = { "EMERGENCY", "ALERT", "CRITICAL", "ERROR",
 			  "WARNING", "NOTE", "INFO", "DEBUG" };
 int prefix_len[8] = { 9, 5, 8, 5, 7, 4, 4, 5 };
 
-/* FIXME: now that we support UDP/TCP we could make this work on Windows ... */
-#ifndef WIN32
-
+#if 1 /* set to 0 to disable all of ulog */
 #include <stdlib.h>
 #include <sys/types.h>
+#ifdef WIN32
+/* this is a hack - server.h already solves the Win32 socket compatibility */
+#include "server.h"
+/* fake, but we don't care */
+static int getuid() { return 0; }
+static int getgid() { return 0; }
+#else
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#endif
 #include <unistd.h>
 #include <string.h>
 #if HAVE_SYS_TIME_H
@@ -220,12 +226,14 @@ void ulog_end(void) {
 	    ulog_path[ulog_dcol] = ':'; /* we probably don't even need this ... */
 	    sendto(ulog_sock, buf, buf_pos, 0, (struct sockaddr*) &sa, sizeof(sa));
 	} else {
+#ifndef WIN32
 	    struct sockaddr_un sa;
 	    if (!buf_pos) return;
 	    memset(&sa, 0, sizeof(sa));
 	    sa.sun_family = AF_LOCAL;
 	    strcpy(sa.sun_path, ulog_path); /* FIXME: check possible overflow? */
 	    sendto(ulog_sock, buf, buf_pos, 0, (struct sockaddr*) &sa, sizeof(sa));
+#endif
 	}
     }
     buf_preamble = buf_pos = 0;

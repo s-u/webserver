@@ -115,7 +115,6 @@ SEXP C_parse_headers(SEXP sWhat) {
 SEXP C_start(SEXP sPort, SEXP sThreads) {
     int http_port = asInteger(sPort), threads = asInteger(sThreads); /*, i = 0, flags = 0, tls_info = 0; */
     int active_servers = 0;
-    const char *ulog_path = "ulog_socket";
     const char *doc_root = "./";
 
     if (!list_content_handlers(0, 0))
@@ -124,8 +123,6 @@ SEXP C_start(SEXP sPort, SEXP sThreads) {
     begin_pool("Rmain");
 
     ulog_set_app_name("Rwebserver");
-
-    ulog_set_path(ulog_path);
 
     r_inline_setup(threads > 0 ? RIF_ASYNC : 0);
 
