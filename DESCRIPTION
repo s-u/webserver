@@ -1,0 +1,11 @@
+Package: webserver
+Version: 1.0-0
+Title: Web/HTTP server for R
+Author: Simon Urbanek <Simon.Urbanek@r-project.org>
+Maintainer: Simon Urbanek <Simon.Urbanek@r-project.org>
+Description: Provides a highly performant and flexible webserver for R.
+  Supports HTTP and TLS/SSL.
+License: GPL-2 | GPL-3
+URL: http://www.rforge.net/webserver/
+BugReports: https://github.com/s-u/webserver/issues
+Encoding: UTF-8
