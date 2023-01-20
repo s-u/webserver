@@ -22,8 +22,19 @@ struct client_connection {
 
 #ifndef WIN32
 #include <sys/un.h> /* needed for unix sockets */
+#define initSock() do{} while(0)
 #else
 typedef int socklen_t;
+static WSADATA wsaData;
+int sock_init_done;
+static int initSock() {
+	if (sock_init_done)
+		return 0;
+	if (WSAStartup(0x200, &wsaData) && WSAStartup(0x101, &wsaData))
+		return 1;
+	sock_init_done = 1;
+	return 0;
+}
 #endif
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -101,16 +112,10 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 #ifndef WIN32
 	struct sockaddr_un lusa;
 #endif
-    
+
 	DBG(ulog_debug(" - create_server(port = %d, socket = %s, mode = %d, flags = 0x%x)", port, localSocketName ? localSocketName : "<NULL>", localSocketMode, flags));
 
-#ifdef WIN32
-	{
-		WSADATA dt;
-		/* initialize WinSock 1.1 */
-		WSAStartup(0x0101, &dt);
-	}
-#endif
+	initSock();
 
 	if (localSocketName) {
 #ifdef WIN32
