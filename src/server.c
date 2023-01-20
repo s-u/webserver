@@ -22,10 +22,14 @@ struct client_connection {
 
 #ifndef WIN32
 #include <sys/un.h> /* needed for unix sockets */
+#else
+typedef int socklen_t;
 #endif
 #include <sys/types.h>
 #include <sys/stat.h>
+#ifdef FORKED
 #include <sys/wait.h>
+#endif
 
 /* AF_LOCAL is the POSIX version of AF_UNIX - we need this e.g. for AIX */
 #ifndef AF_LOCAL
@@ -362,6 +366,10 @@ static void restore_signal_handlers(void) {
 static void setup_signal_handlers(void) {
 }
 static void restore_signal_handlers(void) {
+}
+static void block_SIGPIPE(void) {
+}
+static void restore_SIGPIPE(void) {
 }
 #endif
 

@@ -1,7 +1,29 @@
 #include "async.h"
 #include "ulog.h"
 
+#ifdef WIN32
+#include <io.h>
+#include <fcntl.h>
+#include <time.h>
+#include <winsock2.h>
+typedef unsigned long int nfds_t;
+#define poll WSAPoll
+#define pipe(fds) _pipe(fds,4096, _O_BINARY)
+#define SHUT_RD SD_RECEIVE
+#define SHUT_WR SD_SEND
+#define SHUT_RDWR SD_BOTH
+#define TIME_UTC 1
+static int timespec_get(struct timespec *ts, int base) {
+  __int64 wintime;
+  GetSystemTimeAsFileTime((FILETIME*)&wintime);
+  wintime      -=116444736000000000LL;  /* 1601/1/1 to epoch */
+  ts->tv_sec  =wintime / 10000000LL;
+  ts->tv_nsec =wintime % 10000000LL *100;
+  return base;
+}
+#else
 #include <poll.h>
+#endif
 #include <pthread.h>
 
 #include <string.h>

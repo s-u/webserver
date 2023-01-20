@@ -256,10 +256,10 @@ void ulog(int level, const char *format, ...) {
 void ulog_set_path(const char *path) { }
 void ulog_set_app_name(const char *name) { }
 void ulog_set_facility(int fac) {}
-void ulog_begin(int) {}
+void ulog_begin(int level) {}
 void ulog_add(const char *format, ...) { }
 void ulog_end(void) {}
-void ulog(int, const char *format, ...) { }
+void ulog(int level, const char *format, ...) { }
 void ulog_reset(void) {}
 int  ulog_enabled(void) { return 0; }
 
