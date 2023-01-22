@@ -1,7 +1,7 @@
 fds2file <- function(filename, fds, append=TRUE, mode="666", close=FALSE)
-    .Call(path.expand(filename), as.integer(fds), append, as.octmode(mode))
+    .Call(C_fds2file, path.expand(filename), as.integer(fds), append, as.octmode(mode), close)
 
-R.run <- function(expr, out, where=parent.frame(), bquote=TRUE) {
+R.run <- function(expr, out, where=parent.frame(), bquote=TRUE, redirect=FALSE) {
     ## the . part of bquote
     unquote <- function(e) {
         if (is.pairlist(e)) 
@@ -16,18 +16,20 @@ R.run <- function(expr, out, where=parent.frame(), bquote=TRUE) {
         expr <- unquote(substitute(expr))
 
     f <- pipe(paste(shQuote(file.path(R.home("bin"),"R")),
-                    "--no-echo --no-restore -e 'webserver:::R.run.stdin()' >/dev/null 2>&1"), "w")
+                    "--no-echo --no-restore -e 'webserver:::R.run.stdin()'"), "wb")
     on.exit(close(f))
-    serialize(list(expr=expr, out=out), f, TRUE)
+    serialize(list(expr=expr, out=out, close=redirect), f, FALSE)
 }
 
 ## Internal function acting as client code for R.run: reads
 ## serialized object from stdin and evaluates it accordingly.
 R.run.stdin <- function() {
-    f <- file("stdin", "r")
+    f <- file("stdin", "rb")
     l <- unserialize(f)
+    if (is.null(l$out) && isTRUE(l$close))
+        l$out <- if (.Platform$OS.type == "windows") "nul" else "/dev/null"
     if (is.character(l$out))
-        fds2file(l$out, 1:2, TRUE, as.octmode("666"))
+        fds2file(l$out, 1:2, TRUE, as.octmode("666"), l$close)
     expr <- l$expr
     close(f)
     on.exit(quit("no"))
