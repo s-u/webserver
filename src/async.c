@@ -2,25 +2,7 @@
 #include "ulog.h"
 
 #ifdef WIN32
-#include <io.h>
-#include <fcntl.h>
-#include <time.h>
-#include <winsock2.h>
-typedef unsigned long int nfds_t;
-#define poll WSAPoll
-#define pipe(fds) _pipe(fds,4096, _O_BINARY)
-#define SHUT_RD SD_RECEIVE
-#define SHUT_WR SD_SEND
-#define SHUT_RDWR SD_BOTH
-#define TIME_UTC 1
-static int timespec_get(struct timespec *ts, int base) {
-  __int64 wintime;
-  GetSystemTimeAsFileTime((FILETIME*)&wintime);
-  wintime      -=116444736000000000LL;  /* 1601/1/1 to epoch */
-  ts->tv_sec  =wintime / 10000000LL;
-  ts->tv_nsec =wintime % 10000000LL *100;
-  return base;
-}
+#include "win32.h"
 #else
 #include <poll.h>
 #endif
@@ -62,7 +44,7 @@ struct async_queue {
 
     nfds_t pf_alloc;
     int n;
-    int pfd[2];
+    SOCKET pfd[2];
     volatile int active;
     struct pollfd *pf;
     struct pollfd pf_[1];
@@ -169,7 +151,11 @@ static int async_queue_add_(async_queue *q, client_connection_t *conn, int lock)
 	}
 	q->n++;
 
+#ifdef WIN32
+	send(q->pfd[1], "", 1, 0);
+#else
 	write(q->pfd[1], "", 1);
+#endif
     }
 
     if (lock) pthread_mutex_unlock(&(q->mux));
@@ -246,7 +232,11 @@ void async_queue_poll(async_queue *q, double timeout) {
 	/* the first entry in the fds is always the wake-up pipe */
 	if (q->pf[i].revents) {
 	    char xx[4];
+#ifdef WIN32
+	    recv(q->pf[i].fd, xx, 4, 0);
+#else
 	    read(q->pf[i].fd, xx, 4);
+#endif
 	}
 	i++;
 	/* we rely on the fact that no one can remove from the queue, so the poll list
@@ -414,7 +404,11 @@ int async_queue_finish(async_queue *q) {
     pthread_mutex_unlock(&(q->mux));
 
     /* trigger poll */
+#ifdef WIN32
+    send(q->pfd[1], "", 1, 0);
+#else
     write(q->pfd[1], "", 1);
+#endif
     if (q->poll_job) {
 	DBG(ulog_info("async_queue_finish: waiting for poll thread"));
 	if (pthread_join(q->poll_job->thread, &ret))
