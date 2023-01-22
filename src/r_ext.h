@@ -1,0 +1,10 @@
+#ifndef R_EXT_H__
+#define R_EXT_H__
+
+#include "http.h"
+#include "r_inline.h"
+
+int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t *res);
+client_connection_t *r_ext_new_worker(r_inline *ri);
+
+#endif

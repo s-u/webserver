@@ -11,6 +11,7 @@
 #include "http_date.h"
 #include "r_inline.h"
 #include "async.h"
+#include "r_ext.h"
 
 #include "r_http_tools.h"
 
@@ -202,6 +203,94 @@ static SEXP buf2raw(const char *buf, size_t len) {
     return R_NilValue;
 }
 
+void r_inline_process(http_request_t *req, http_result_t *res, SEXP sFun, int flags) {
+    /* original has: (path, query, body, headers) */
+    SEXP sPath     = PROTECT(mkString(req->url));
+    SEXP sQuery    = PROTECT(req->query ?
+			     ((flags & RIF_PARSE_QUERY) ? r_http_parse_query(req->query) : mkString(req->query)) :
+			     R_NilValue);
+    SEXP sBody     = PROTECT(buf2raw(req->body, req->body_len));
+    SEXP sCTS      = Rf_install("content-type");
+    SEXP sHdr      = PROTECT((flags & RIF_PARSE_HEADERS) ? r_http_parse_headers(req->headers, -1) :
+			     buf2raw(req->headers, req->headers ? strlen(req->headers) : 0));
+    SEXP sMethod   = PROTECT(mkString(req->method));
+    if (req->content_type)
+	Rf_setAttrib(sBody, sCTS, mkString(req->content_type));
+    /* fragments are not sent even though they are allowed, so for now let's ignore them
+       SEXP sFragment = PROTECT(req->fragment ? mkString(req->fragment) : R_NilValue); */
+    SEXP what      = PROTECT(LCONS(sFun, list5(sPath, sQuery, sBody, sHdr, sMethod))), x;
+    rs_eval_t e = { what, R_GlobalEnv, 0, 0, 0, 0 };
+    int ter = R_ToplevelExec(Rserve_eval_, &e);
+    UNPROTECT(6);
+    do {
+	if (!ter || !e.last) {
+	    /* we have (possibly) more info: e.traceback */
+	    const char *errmsg = R_curErrorBuf();
+	    DBG(ulog_debug("r_inline: evaluation failed with %s", errmsg));
+	    res->err = strdup(errmsg);
+	    break;
+	}
+	x = e.last;
+	if (TYPEOF(x) == STRSXP && LENGTH(x) > 0) { /* string means there was an error */
+	    res->err = strdup(CHAR(STRING_ELT(x, 0)));
+	    break;
+	}
+
+	if (TYPEOF(x) == VECSXP && LENGTH(x) > 0) { /* a list (generic vector) can be a real payload */
+	    SEXP xNames = getAttrib(x, R_NamesSymbol);
+	    if (LENGTH(x) > 1) {
+		SEXP sCT = VECTOR_ELT(x, 1); /* second element is content type if present */
+		if (TYPEOF(sCT) == STRSXP && LENGTH(sCT) > 0) {
+		    if (res->content_type)
+			free(res->content_type);
+		    res->content_type = strdup(CHAR(STRING_ELT(sCT, 0)));
+		    if (LENGTH(x) > 2) { /* third element is headers vector */
+			SEXP sHeaders = VECTOR_ELT(x, 2);
+			if (TYPEOF(sHeaders) == STRSXP && LENGTH(sHeaders) > 0)
+			    res->headers = R_headers2cstr(sHeaders);
+			if (LENGTH(x) > 3) /* fourth element is HTTP code */
+			    res->code = asInteger(VECTOR_ELT(x, 3));
+		    }
+		}
+	    }
+	    SEXP y = VECTOR_ELT(x, 0);
+	    if (TYPEOF(y) == STRSXP && LENGTH(y) > 0) {
+		int  is_tmp = 0;
+		const char *cs = CHAR(STRING_ELT(y, 0));
+		if (TYPEOF(xNames) == STRSXP && LENGTH(xNames) > 0 &&
+		    (!strcmp(CHAR(STRING_ELT(xNames, 0)), "file") || (is_tmp = !strcmp(CHAR(STRING_ELT(xNames, 0)), "tmpfile")))) {
+		    res->payload = strdup(cs);
+		    res->payload_type = is_tmp ? PAYLOAD_TEMPFILE : PAYLOAD_FILE;
+		    break;
+		}
+		res->payload = strdup(cs);
+		res->payload_len = strlen(res->payload);
+		break;
+	    }
+	    if (TYPEOF(y) == RAWSXP) {
+		res->payload_len = XLENGTH(y);
+		res->payload = (char*) malloc(res->payload_len);
+		memcpy(res->payload, RAW(y), res->payload_len);
+		break;
+	    }
+	    /* not anything we recognize */
+	    res->err = strdup("Invalid response by R.");
+	}
+    } while(0);
+    if (e.last)
+	R_ReleaseObject(e.last);
+
+    if (e.traceback)
+	R_ReleaseObject(e.traceback);
+}
+
+struct client_connection {
+    /* common information for all connections */
+    client_connection_info_t info;
+};
+
+static __thread client_connection_t *worker;
+
 int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     const char *path;
     r_inline *r = (r_inline*) user;
@@ -219,88 +308,21 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     }
     DBG(ulog_debug("r_inline: matched"));
 
+    if (r->flags & RIF_FORK) {
+	/* FIXME: handle the case where the worked died */
+	if (!worker) {
+	    DBG(ulog_debug("r_inline: RIF_FORK requested, starting new worker"));
+	    worker = r_ext_new_worker(r);
+	}
+	DBG(ulog_debug("r_inline: switchign to r_ext worker at %p (%d)",
+		       (void*) worker, (int) worker->info.s));
+	r_ext_one_request(worker, req, res);
+	return 1;
+    }
+
     if (r_queue)
 	async_queue_begin(r_queue);
-    {
-	/* original has: (path, query, body, headers) */
-	SEXP sPath     = PROTECT(mkString(req->url));
-	SEXP sQuery    = PROTECT(req->query ?
-				 ((r->flags & RIF_PARSE_QUERY) ? r_http_parse_query(req->query) : mkString(req->query)) :
-				 R_NilValue);
-	SEXP sBody     = PROTECT(buf2raw(req->body, req->body_len));
-	SEXP sCTS      = Rf_install("content-type");
-	SEXP sHdr      = PROTECT((r->flags & RIF_PARSE_HEADERS) ? r_http_parse_headers(req->headers, -1) :
-				 buf2raw(req->headers, req->headers ? strlen(req->headers) : 0));
-	SEXP sMethod   = PROTECT(mkString(req->method));
-	if (req->content_type)
-	    Rf_setAttrib(sBody, sCTS, mkString(req->content_type));
-	/* fragments are not sent even though they are allowed, so for now let's ignore them
-	   SEXP sFragment = PROTECT(req->fragment ? mkString(req->fragment) : R_NilValue); */
-	SEXP what      = PROTECT(LCONS(r->sFun, list5(sPath, sQuery, sBody, sHdr, sMethod))), x;
-	rs_eval_t e = { what, R_GlobalEnv, 0, 0, 0, 0 };
-	int ter = R_ToplevelExec(Rserve_eval_, &e);
-	UNPROTECT(6);
-	do {
-	    if (!ter || !e.last) {
-		/* we have (possibly) more info: e.traceback */
-		const char *errmsg = R_curErrorBuf();
-		DBG(ulog_debug("r_inline: evaluation failed with %s", errmsg));
-		res->err = strdup(errmsg);
-		break;
-	    }
-	    x = e.last;
-	    if (TYPEOF(x) == STRSXP && LENGTH(x) > 0) { /* string means there was an error */
-		res->err = strdup(CHAR(STRING_ELT(x, 0)));
-		break;
-	    }
-
-	    if (TYPEOF(x) == VECSXP && LENGTH(x) > 0) { /* a list (generic vector) can be a real payload */
-		SEXP xNames = getAttrib(x, R_NamesSymbol);
-		if (LENGTH(x) > 1) {
-		    SEXP sCT = VECTOR_ELT(x, 1); /* second element is content type if present */
-		    if (TYPEOF(sCT) == STRSXP && LENGTH(sCT) > 0) {
-			if (res->content_type)
-			    free(res->content_type);
-			res->content_type = strdup(CHAR(STRING_ELT(sCT, 0)));
-			if (LENGTH(x) > 2) { /* third element is headers vector */
-			    SEXP sHeaders = VECTOR_ELT(x, 2);
-			    if (TYPEOF(sHeaders) == STRSXP && LENGTH(sHeaders) > 0)
-				res->headers = R_headers2cstr(sHeaders);
-			    if (LENGTH(x) > 3) /* fourth element is HTTP code */
-				res->code = asInteger(VECTOR_ELT(x, 3));
-			}
-		    }
-		}
-		SEXP y = VECTOR_ELT(x, 0);
-		if (TYPEOF(y) == STRSXP && LENGTH(y) > 0) {
-		    int  is_tmp = 0;
-		    const char *cs = CHAR(STRING_ELT(y, 0));
-		    if (TYPEOF(xNames) == STRSXP && LENGTH(xNames) > 0 &&
-			(!strcmp(CHAR(STRING_ELT(xNames, 0)), "file") || (is_tmp = !strcmp(CHAR(STRING_ELT(xNames, 0)), "tmpfile")))) {
-			res->payload = strdup(cs);
-			res->payload_type = is_tmp ? PAYLOAD_TEMPFILE : PAYLOAD_FILE;
-			break;
-		    }
-		    res->payload = strdup(cs);
-		    res->payload_len = strlen(res->payload);
-		    break;
-		}
-		if (TYPEOF(y) == RAWSXP) {
-		    res->payload_len = XLENGTH(y);
-		    res->payload = (char*) malloc(res->payload_len);
-		    memcpy(res->payload, RAW(y), res->payload_len);
-		    break;
-		}
-		/* not anything we recognize */
-		res->err = strdup("Invalid response by R.");
-	    }
-	} while(0);
-	if (e.last)
-	    R_ReleaseObject(e.last);
-
-	if (e.traceback)
-	    R_ReleaseObject(e.traceback);
-    }
+    r_inline_process(req, res, r->sFun, r->flags);
     if (r_queue)
 	async_queue_end(r_queue);
     end_pool();
