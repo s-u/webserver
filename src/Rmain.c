@@ -86,17 +86,25 @@ SEXP C_add_handler(SEXP args) {
 	add_content_handler(http_rewrite_handler,
 			    http_rewrite_entry(CHAR(STRING_ELT(sPrefix, 0)),
 					       CHAR(STRING_ELT(sReplace, 0)),
-					       (do_stop ? HSF_STOP : 0)),
+					       (do_stop ? REWRITE_FLAG_LAST : 0)),
 			    NULL, (free_handler_fn_t) http_rewrite_free);
     } else if (!strcmp(htype, "rfun")) {
 	SEXP sFn = CAR(args); args = CDR(args);
 	if (!isFunction(sFn) && !isSymbol(sFn))
 	    Rf_error("fn must be a function");
+	int flags = RIF_ASYNC | RIF_PARSE_QUERY | RIF_PARSE_HEADERS;
+	SEXP s = findArg(args, "fork", 0);
+	if (s && Rf_asInteger(s))
+	    flags |= RIF_FORK;
+	s = findArg(args, "parse.headers", 0);
+	if (s && !Rf_asInteger(s))
+	    flags ^= RIF_PARSE_HEADERS;
+	s = findArg(args, "parse.query", 0);
+	if (s && !Rf_asInteger(s))
+	    flags ^= RIF_PARSE_QUERY;
 	add_content_handler(r_inline_handler,
 			    r_inline_entry(CHAR(STRING_ELT(sPrefix, 0)),
-					   sFn,
-					   (do_stop ? HSF_STOP : 0) |
-					   RIF_ASYNC | RIF_PARSE_QUERY | RIF_PARSE_HEADERS),
+					   sFn, flags),
 			    NULL, (free_handler_fn_t) r_inline_free);
     } else
 	Rf_error("Unknown handler type '%s'", htype);
