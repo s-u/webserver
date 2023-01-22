@@ -15,11 +15,15 @@ R.run <- function(expr, out, where=parent.frame(), bquote=TRUE, redirect=FALSE) 
     if (bquote)
         expr <- unquote(substitute(expr))
 
-    f <- pipe(paste(shQuote(file.path(R.home("bin"),"R")),
-                    "--no-echo --no-restore -e 'webserver:::R.run.stdin()'"), "wb")
+    f <- R.pipe("webserver:::R.run.stdin()")
     on.exit(close(f))
     serialize(list(expr=expr, out=out, close=redirect), f, FALSE)
 }
+
+R.pipe <- function(cmd, mode="wb")
+    pipe(paste(shQuote(file.path(R.home("bin"), "R")),
+               "--no-echo --no-restore -e",
+               shQuote(cmd)), mode)
 
 ## Internal function acting as client code for R.run: reads
 ## serialized object from stdin and evaluates it accordingly.
