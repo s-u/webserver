@@ -8,7 +8,11 @@
 
 #include <string.h>
 
-#ifdef __APPLE__
+#ifdef HAVE_SYS_PARAM_H
+#include <sys/param.h>
+#endif
+
+#ifdef BSD
 #define MTIME(X) (X).st_mtimespec.tv_sec
 #else
 #define MTIME(X) (X).st_mtime

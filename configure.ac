@@ -54,7 +54,7 @@ AC_ARG_VAR([PKGCONFIG],[command to use for flags detection if none are supplied,
 AC_PROG_CC
 
 AC_CHECK_HEADERS([limits.h string.h memory.h sys/time.h unistd.h])
-AC_CHECK_HEADERS([sys/stat.h sys/types.h sys/socket.h sys/un.h netinet/in.h netinet/tcp.h])
+AC_CHECK_HEADERS([sys/stat.h sys/types.h sys/socket.h sys/param.h sys/un.h netinet/in.h netinet/tcp.h])
 
 # connect may need -lsocket and/or -lnsl (e.g. on Solaris)
 AC_CHECK_FUNCS(connect)
