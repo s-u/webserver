@@ -35,12 +35,19 @@ typedef struct async_job_list {
     async_job *job[1];
 } async_job_list;
 
+typedef struct async_cleanup {
+    struct async_cleanup *next, *prev;
+    void *data;
+    void (*fn)(async_queue *, void*);
+} async_cleanup;
+
 struct async_queue {
     async_conn *head, *tail;
     pthread_mutex_t mux;
     pthread_cond_t  cond;
     async_job *poll_job;
     async_job_list *process_jobs;
+    async_cleanup *cleanup;
 
     nfds_t pf_alloc;
     int n;
@@ -49,6 +56,37 @@ struct async_queue {
     struct pollfd *pf;
     struct pollfd pf_[1];
 };
+
+void async_thread_add_cleanup(async_queue *q, void (*fn)(async_queue *, void *), void *par) {
+    async_cleanup *cl = (async_cleanup*) malloc(sizeof(async_cleanup));
+    if (!cl || !q || !fn)
+	return;
+    cl->next = cl->prev = 0;
+    cl->data = par;
+    cl->fn = fn;
+    if (!q->cleanup)
+	q->cleanup = cl;
+    else {
+	async_cleanup *c = q->cleanup;
+	while (c->next && c->data != par && c->fn != fn)
+	    c = c->next;
+	/* do not add duplicates */
+	if (c->data == par && c->fn == fn)
+	    return;
+	cl->prev = c;
+	c->next = cl;
+    }
+}
+
+static void async_thread_call_cleanup(async_queue *q) {
+    async_cleanup *cl = q ? q->cleanup : 0;
+    while (cl && cl->next)
+	cl = cl->next;
+    while (cl) {
+	cl->fn(q, cl->data);
+	cl = cl->prev;
+    }
+}
 
 async_queue *async_queue_new(void) {
     nfds_t max_pf = 8192;
@@ -62,6 +100,7 @@ async_queue *async_queue_new(void) {
     q->n = 0;
     q->poll_job = 0;
     q->process_jobs = 0;
+    q->cleanup = 0;
     pipe(q->pfd);
     q->active = 1;
     pthread_mutex_init(&(q->mux), 0);
@@ -374,6 +413,7 @@ void *async_job_process_queue(void *par) {
 	async_queue_process(q, 60.0);
     }
     DBG(ulog_debug("async_job_process_queue(%p): ending loop for thread %s", par, name));
+    async_thread_call_cleanup(q);
     return par;
 }
 
@@ -385,6 +425,7 @@ void *async_job_poll_queue(void *par) {
 	async_queue_poll(q, 20.0);
     }
     DBG(ulog_debug("async_job_poll_queue(%p): ending loop", par));   
+    async_thread_call_cleanup(q);
     return par;
 }
 

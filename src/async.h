@@ -21,7 +21,7 @@ void async_queue_stop(async_queue *q);
 /* signal readiness of a connection if no poll thread is used */
 int  async_queue_signal_ready(async_queue *q, client_connection_t *conn);
 
-/* joins all processing threads (finsihing any processing that is still
+/* joins all processing threads (finishing any processing that is still
    in flight) and releases all connections */
 int async_queue_finish(async_queue *q);
 /* this should be called only if async_queue_finish terminated without an error. */
@@ -33,6 +33,7 @@ void *async_job_process_queue(void *par);
 void *async_job_poll_queue(void *par);
 
 async_job *async_run(void * (thr)(void *), void *par);
+void async_thread_add_cleanup(async_queue *q, void (*fn)(async_queue *, void *), void *par);
 
 /* use the following two to manage poll and process threads for a queue */
 async_job *async_queue_start_poll_thread(async_queue *q);
