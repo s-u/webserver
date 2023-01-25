@@ -16,6 +16,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#ifndef WIN32
+#include <signal.h>
+#endif
 
 #include <Rinternals.h>
 
@@ -92,6 +95,10 @@ static size_t build_request_hdr(http_request_t *r, struct rmsg *msg, char *buf, 
 }
 
 static void parse_request_hdr(http_request_t *r, struct rmsg *msg, const char *buf) {
+    DBG(ulog_debug("r_ext: parse_request_hdr: path=%d, query=%d, fragment=%d, ctype=%d, headers=%d [%d/%d]",
+		   msg->h.req.path, msg->h.req.query, msg->h.req.fragment,
+		   msg->h.req.content_type, msg->h.req.headers,
+		   (int) msg->hdr_len, (int) msg->body_len));
     http_request_set_url(r,
 			 (msg->h.req.path >= 0) ? (buf + msg->h.req.path) : 0,
 			 (msg->h.req.query >= 0) ? (buf + msg->h.req.query) : 0,
@@ -138,15 +145,19 @@ static void parse_response_hdr(http_result_t *r, struct rmsg *msg, char *buf) {
     r->code = msg->h.res.code;
     r->flags = msg->h.res.flags;
     r->payload_type = msg->h.res.payload_type;
+    r->payload = msg->body_len ? (buf + msg->hdr_len) : 0;
+    r->payload_len = msg->body_len;
     r->range_start = msg->h.res.range_start;
     r->range_end = msg->h.res.range_end;
     r->date = msg->date;
 }
 
 /* state */
-#define RCS_HDR   0
-#define RCS_MSG   1
-#define RCS_RECVD 2
+#define RCS_HDR    0
+#define RCS_MSG    1
+#define RCS_RECVD  2
+#define RCS_ABORT -1
+#define RCS_DEAD  -2
 
 struct client_connection {
     /* common information for all connections */
@@ -161,29 +172,78 @@ struct client_connection {
 };
 
 static void r_conn_fin(client_connection_t *c) {
-    DBG(ulog_debug("finalizing worker %p", (void*) c));
+    DBG(ulog_debug("r_ext: finalizing worker %p (pid=%d)", (void*) c, (int) (c ? c->pid : -1)));
     if (!c)
 	return;
     if (c->info.s != INVALID_SOCKET) {
 	closesocket(c->info.s);
 	c->info.s = -1;
     }
+#ifndef WIN32
+    if (c->pid) { /* are we the parent of a worker ? */
+	int stat = 0;
+	pid_t wp = 0;
+	/* FIXME: it would be nice to wait a bit, since the worker may take some time
+	   to register that we are shutting down. In order to do that, we should
+	   create a pool where we send all workers to finish so we don't have to
+	   wait for them one by one */
+	if ((wp = waitpid(c->pid, &stat, WNOHANG)) <= 0) {
+	    DBG(ulog_debug("r_ext: r_conn_fin worker %p (pid=%d) has not terminated, sending SIGHUP",
+			   (void*) c, (int) c->pid));
+	    /* that should be enough to break any waiting loops */
+	    kill(c->pid, SIGHUP);
+	    DBG(ulog_debug("r_ext: r_conn_fin - waiting for worker %p (pid=%d)",
+			   (void*) c, (int) c->pid));
+	    /* FIXME: in case ther eis a probelm we may not want to wait indefinitely
+	       see above for a possibly better apporach ...*/
+	    wp = waitpid(c->pid, &stat, 0);
+	}
+	DBG(ulog_debug("r_ext: r_conn_fin - wait result for worker %p (pid=%d) = %d (stat=%d)",
+		       (void*) c, (int) c->pid, (int) wp, stat));
+    }
+#endif
     if (c->buf)
 	free(c->buf);
 }
 
+static void r_msg_finished(client_connection_t *c) {
+    /* properly processed message */
+    if (c->state == RCS_RECVD) {
+	c->pos = 0;
+	c->hdr_pos = 0;
+	c->state = RCS_HDR;
+	return;
+    }
+    /* otherwise something went wrong */
+    if (c->info.s != INVALID_SOCKET) {
+	closesocket(c->info.s);
+	c->info.s = INVALID_SOCKET;
+	c->state = RCS_ABORT;
+    }
+}
+
 static void r_process(client_connection_t *c) {
     server_t *srv = c->info.srv;
+    DBG(ulog_debug("r_ext: r_process %p (%d), state=%d, hdr=%d/%d, body=%d/%d[/%d]",
+		   (void*) c, (int) c->info.s, c->state,
+		   (int) c->hdr_pos, (int) sizeof(struct rmsg),
+		   (int) c->pos, (int) c->len, (int) c->alloc));
     if (c->state == RCS_HDR) {
 	if (c->hdr_pos < sizeof(struct rmsg)) {
 	    int n = srv->recv(c, ((char*)(&c->hdr)) + c->hdr_pos, sizeof(struct rmsg) - c->hdr_pos);
 	    if (n < 1) {
-		if (n)
-		    ulog_error("r_ext: error reading from R worker, closing connection");
-		else
-		    DBG(ulog_debug("r_ext: remote R worker closed connection"));
-		closesocket(c->info.s);
-		c->info.s = INVALID_SOCKET;
+		/* shutdown request will close the connection and set
+		   the FD to -1 in which case we don't need to do the close */
+		if (c->info.s != INVALID_SOCKET) {
+		    if (n)
+			ulog_error("r_ext: error reading from R worker (%s), closing connection",
+				   strerror(errno));
+		    else
+			DBG(ulog_debug("r_ext: remote R worker closed connection"));
+		    closesocket(c->info.s);
+		    c->info.s = INVALID_SOCKET;
+		} else
+		    DBG(ulog_debug("r_ext: connection closed due to signal"));
 		return;
 	    }
 	    c->hdr_pos += n;
@@ -247,6 +307,17 @@ static void r_process(client_connection_t *c) {
 	if (c->hdr.cmd == CMD_HTTP_REQ) {
 	    char *body = c->buf + c->hdr.hdr_len;
 	    DBG(ulog_debug("CMD_HTTP_REQ received"));
+#if 0 /* dump the payload */
+	    DBG(if (c->len) {
+		    size_t i = 0;
+		    while (i < c->len) {
+			if (!(i & 15))
+			    fprintf(stderr, "\n%04x ", (int) i);
+			fprintf(stderr, " %02x", (int)(c->buf[i++]));
+		    }
+		    fprintf(stderr, "\n");
+		});
+#endif
 	    http_request_t req;
 	    http_result_t  res;
 	    memset(&req, 0, sizeof(req));
@@ -280,17 +351,22 @@ static void r_process(client_connection_t *c) {
 	    c->hdr.hdr_len = l;
 	    c->hdr.body_len = res.payload_len;
 	    c->hdr.res = 0;
-	    srv->send(c, &c->hdr, sizeof(c->hdr));
-	    if (l)
-		srv->send(c, c->buf, l);
-	    if (res.payload_len)
-		srv->send(c, res.payload, res.payload_len);
-	    /* successfully responded -> back to HDR */
-	    c->state = RCS_HDR;
+	    n = srv->send(c, &c->hdr, sizeof(c->hdr));
+	    DBG(ulog_debug("r_ext: send msg header (%d/%d)", n, (int) sizeof(c->hdr)));
+	    if (l) {
+		n = srv->send(c, c->buf, l);
+		DBG(ulog_debug("r_ext: send header (%d/%d)", n, (int) l));
+	    }
+	    if (res.payload_len) {
+		n = srv->send(c, res.payload, res.payload_len);
+		DBG(ulog_debug("r_ext: send payload (%d/%d)", n, (int) res.payload_len));
+	    }
 	} else if (c->hdr.cmd == CMD_HTTP_RESP) {
 	    /* we do not handle that here, go out */
 	    return;
 	}
+	/* successfully responded -> back to HDR */
+	r_msg_finished(c);
     }
 }
 
@@ -319,8 +395,10 @@ int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t
 	if (c->alloc < MIN_BUF_SIZE)
 	    c->alloc = MIN_BUF_SIZE;
 	c->buf = (char*) malloc(c->alloc);
-	if (!c->buf)
+	if (!c->buf) {
+	    c->alloc = 0;
 	    return -1;
+	}
 	l = build_request_hdr(req, &c->hdr, c->buf, c->alloc);
     }
     if (!req->body)
@@ -332,11 +410,41 @@ int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t
     c->hdr.res = 0;
     DBG(ulog_debug("r_ext.r_one_request: sending CMD_HTTP_REQ, hdr_len=%ld, body_len=%ld",
 	     (long) l, (long) req->body_len));
-    srv->send(c, &c->hdr, sizeof(c->hdr));
-    if (l)
-	srv->send(c, c->buf, l);
-    if (req->body_len)
-	srv->send(c, req->body, req->body_len);
+    int n = srv->send(c, &c->hdr, sizeof(c->hdr));
+    DBG(ulog_debug("r_ext.r_one_request: send header = %d", n));
+    if (n < (int) sizeof(c->hdr)) {
+	ulog_warn("r_ext.r_one_request: failed to send request to worker %p (pid=%d)",
+		  (void*) c, (int) c->pid);
+	if (c->info.s != INVALID_SOCKET){
+	    closesocket(c->info.s);
+	    c->info.s = INVALID_SOCKET;
+	}
+	return -2;
+    }
+    /* FIXME: are partial sends a thing on the socket pairs?
+       Also need to check/fix size types. */
+    if (l) {
+	n = srv->send(c, c->buf, l);
+	DBG(ulog_debug("r_ext.r_one_request: send hdr_len = %d", n));
+	if (n < (int) l) {
+	    if (c->info.s != INVALID_SOCKET){
+		closesocket(c->info.s);
+		c->info.s = INVALID_SOCKET;
+	    }
+	    return -2;
+	}
+    }
+    if (req->body_len) {
+	n = srv->send(c, req->body, req->body_len);
+	DBG(ulog_debug("r_ext.r_one_request: send body = %d", n));
+	if (n < req->body_len) {
+	    if (c->info.s != INVALID_SOCKET){
+		closesocket(c->info.s);
+		c->info.s = INVALID_SOCKET;
+	    }
+	    return -2;
+	}
+    }
     DBG(ulog_debug("r_ext.r_one_request: waiting for response"));
     while (c->info.s != INVALID_SOCKET && c->state != RCS_RECVD)
 	r_process(c);
@@ -345,10 +453,50 @@ int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t
 	/* something went wrong and the connection is closed */
 	return -1;
     parse_response_hdr(res, &c->hdr, c->buf);
+    r_msg_finished(c);
     return 0;
 }
 
+int r_ext_ready(client_connection_t *c) {
+    return (c && c->info.s != INVALID_SOCKET && c->state == RCS_HDR) ? 1 : 0;
+}
+
+void r_ext_close(client_connection_t *c) {
+    if (!c)
+	return;
+    if (c->info.s != INVALID_SOCKET) {
+	DBG(ulog_debug("r_ext_close: requested for active connection %p (%d)",
+		       (void*) c, (int) c->info.s));
+	closesocket(c->info.s);
+	c->info.s = INVALID_SOCKET;
+	c->state = RCS_ABORT;
+#ifndef WIN32
+	if (c->pid)
+	    kill(c->pid, SIGHUP);
+#endif
+    }
+}
+
+/* the one connection handled by the child process */
+static client_connection_t *work_conn;
+
+#ifndef WIN32
+static void sighandler(int sig) {
+    DBG(ulog_debug("r_ext: sighandler called"));
+#if 0 /* we could force the connection, but it should not be necessary */
+    if (work_conn && work_conn->info.s != INVALID_SOCKET) {
+	closesocket(work_conn->info.s);
+	work_conn->info.s = INVALID_SOCKET;
+    }
+#endif
+}
+#endif
+
 client_connection_t *r_ext_new_worker(r_inline *ri) {
+#ifdef WIN32
+    ulog_error("Windows does not support forked workers.");
+    return 0;
+#else
     pid_t f;
     client_connection_t *c = (client_connection_t*) calloc(sizeof(client_connection_t), 1);
     int ios[2];
@@ -356,6 +504,7 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
 	return c;
     if (!remote_server) /* virtual server */
 	remote_server = new_remote_server(0);
+
     if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ios)) {
 	ulog_error("r_new_worker: socketpair() failed with %s", strerror(errno));
 	return 0;
@@ -368,22 +517,34 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
     }
     if (!f) { /* child */
 	DBG(ulog_debug("r_new_worker: child process %d started", (int) getpid()));
+	closesocket(ios[0]);
 	c->info.s = ios[1];
 	c->info.srv = remote_server;
-	while (c->info.s != INVALID_SOCKET) {
+	c->ri = ri;
+	/* in the child this should be the only connection as
+	   we process it synchronously */
+	work_conn = c;
+#ifndef WIN32
+	{
+	    sigset_t set;
+	    signal(SIGHUP, sighandler);
+	    sigemptyset(&set);
+	    sigaddset(&set, SIGHUP);
+	    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+	}
+#endif
+	while (c->info.s != INVALID_SOCKET && c->state != RCS_ABORT) {
 	    r_process(c);
-	    /* RCVD state is only after CMD_HTTP_RESP which we will
-	       ignore as there is no reply expected */
-	    if (c->state == RCS_RECVD)
-		c->state = RCS_HDR;
 	}
 	DBG(ulog_debug(" - child process %d terminating", (int) getpid()));
 	exit(0);
     }
     /* parent */
+    closesocket(ios[1]);
     c->info.s = ios[0];
     c->pid = f;
     c->info.srv = remote_server;
     c->ri = ri;
     return c;
+#endif /* !WIN32 */
 }

@@ -184,7 +184,7 @@ static void http_close(client_connection_t *conn) {
 
 static void conn_finalize(client_connection_t *c)
 {
-    DBG(ulog_debug("finalizing worker %p", (void*) c));
+    DBG(ulog_debug("http: finalizing connection %p", (void*) c));
 	/* close the connection */
 	http_close(c);
 	/* free all the transient variables */
@@ -901,6 +901,8 @@ static void HTTP_connected(client_connection_t *conn) {
 int http_request_set_url(http_request_t *req, const char *path, const char *query, const char *fragment) {
 	size_t len, path_len, query_len, fragment_len;
 	char *new_path, *c, *new_query = 0, *new_fragment = 0;
+	DBG(ulog_debug("http:http_request_set_url(%s, %s,%s)",
+				  path ? path : "<NULL>", query ? query : "<NULL>", fragment ? fragment : "<NULL>"));
 	if (!path)
 		path = "";
 	len =
@@ -937,11 +939,20 @@ static void http_server_fin(server_t *srv) {
 		free(srv->aux);
 }
 
+/* FIXME: this is a hack - handlers should have a way
+   to talk to us - we should not have to deal with this diretly. */
+#include "r_inline.h"
+
+static void http_thread_cleanup(async_queue *q, void *par) {
+	r_inline_thread_end();
+}
+
 int http_start_threads(int n) {
 	if (!http_queue) {
 		http_queue = async_queue_new();
 		if (!http_queue)
 			return -1;
+		async_thread_add_cleanup(http_queue, http_thread_cleanup, 0);
 		async_queue_start_poll_thread(http_queue);
 	}
 	return async_queue_set_process_threads(http_queue, n);

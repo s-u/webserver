@@ -64,14 +64,6 @@ void r_inline_setup(int flags) {
     }
 }
 
-void r_inline_end() {
-    if (r_queue) {
-	async_queue_finish(r_queue);
-	async_queue_free(r_queue);
-	r_queue = 0;
-    }
-}
-
 r_inline *r_inline_entry(const char *prefix, SEXP sFun, int flags) {
     r_inline *r;
     if (!prefix)
@@ -291,10 +283,33 @@ struct client_connection {
 
 static __thread client_connection_t *worker;
 
+void r_inline_end() {
+    if (r_queue) {
+	async_queue_finish(r_queue);
+	async_queue_free(r_queue);
+	r_queue = 0;
+    }
+}
+
+void r_inline_thread_end() {
+    if (worker) {
+	DBG(ulog_debug("r_inline_end: disposing of workers"));
+	if (r_ext_ready(worker))
+	    r_ext_close(worker);
+	if (worker->info.srv && worker->info.srv->conn_fin)
+	    worker->info.srv->conn_fin(worker);
+	free(worker);
+	worker = 0;
+    }
+}
+
 int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     const char *path;
     r_inline *r = (r_inline*) user;
 
+    DBG(ulog_debug("r_inline_handler(%p [%s], %p, %p)", (void*) req,
+		   (req && req->url) ? req->url : "<NULL>",
+		   (void*) res, (void*) user));
     /* this should never happen, but just to be safe ... */
     if (!req || !req->url || !r) return 0;
 
@@ -309,14 +324,65 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     DBG(ulog_debug("r_inline: matched"));
 
     if (r->flags & RIF_FORK) {
-	/* FIXME: handle the case where the worked died */
-	if (!worker) {
-	    DBG(ulog_debug("r_inline: RIF_FORK requested, starting new worker"));
-	    worker = r_ext_new_worker(r);
+	client_connection_t *old_worker = 0;
+	int opr = 0;
+	do {
+	    /* check if the current worker is usable */
+	    if (worker && !r_ext_ready(worker)) {
+		if (old_worker) {
+		    DBG(ulog_debug("r_inline: releasing non-functional worker %p", (void*) old_worker));
+		    if (old_worker->info.srv && old_worker->info.srv->conn_fin)
+			old_worker->info.srv->conn_fin(old_worker);
+		    free(old_worker);
+		}
+		old_worker = worker;
+		r_ext_close(worker);
+		worker = 0;
+	    }
+	    if (!worker) {
+		DBG(ulog_debug("r_inline: RIF_FORK requested, starting new worker"));
+		r->flags ^= RIF_FORK;
+		/* the worker should not have the FORK flag */
+		worker = r_ext_new_worker(r);
+		r->flags |= RIF_FORK;
+		if (!worker) {
+		    /* we delayed the destruction of the old worker for
+		       performance reasons, but now we have to do it */
+		    if (old_worker) {
+			if (old_worker->info.srv && old_worker->info.srv->conn_fin)
+			    old_worker->info.srv->conn_fin(old_worker);
+			free(old_worker);
+		    }
+		    return -1;
+		}
+	    }
+	    DBG(ulog_debug("r_inline: switching to r_ext worker at %p (%d)",
+			   (void*) worker, (int) worker->info.s));
+	    opr = r_ext_one_request(worker, req, res);
+	    if (opr == -2) /* worker failed */
+		DBG(ulog_debug("r_inline: worker failed - respawning"));
+	} while (opr == -2);
+
+	if (opr == -1) { /* internal error in the handler */
+	    res->code = 500;
+	    ulog_error("r_ext worker memory allocation error");
+	    return 1;
 	}
-	DBG(ulog_debug("r_inline: switchign to r_ext worker at %p (%d)",
-		       (void*) worker, (int) worker->info.s));
-	r_ext_one_request(worker, req, res);
+
+	/* FIXME: the payload is tied to the worker's buffer.
+	   Safe but inefficient: copy it */
+	if (res->payload_len) {
+	    char *np = malloc(res->payload_len);
+	    if (np)
+		memcpy(np, res->payload, res->payload_len);
+	    res->payload = np;
+	}
+	if (old_worker) {
+	    DBG(ulog_debug("r_inline: releasing non-functional worker %p", (void*) old_worker));
+	    if (old_worker->info.srv && old_worker->info.srv->conn_fin)
+		old_worker->info.srv->conn_fin(old_worker);
+	    free(old_worker);
+	}
 	return 1;
     }
 
