@@ -119,9 +119,7 @@ void ulog_reset(void) {
 
 #ifndef NO_ULOG
 void ulog_begin(int level) {
-    if (!ulog_path) return;
-
-    if (ulog_sock == -1) { /* first-time user */
+    if (ulog_sock == -1 && ulog_path) { /* first-time user */
 	int u_family = AF_LOCAL;
 	int u_sock   = SOCK_DGRAM;
 	gethostname(hn, sizeof(hn));
