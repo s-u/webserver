@@ -92,8 +92,16 @@ SEXP C_add_handler(SEXP args) {
 	SEXP sFn = CAR(args); args = CDR(args);
 	if (!isFunction(sFn) && !isSymbol(sFn))
 	    Rf_error("fn must be a function");
+	/* RIF_ASYNC just means that a mutex will be used before evaluations.
+	   Also once this is enabled, the mutex is used for *all* evaluations
+	   even for handlers that did not specify it. */
 	int flags = RIF_ASYNC | RIF_PARSE_QUERY | RIF_PARSE_HEADERS;
 	SEXP s = findArg(args, "fork", 0);
+	/* The fork handler does not use the synchronization mutex,
+	   but the child will use the regular handler, so it may use it.
+	   Thus we may want to remove RIF_ASYNC, but probably more sensible
+	   would be for the child to remove the r_queue - uless we want
+	   to also split the I/O in the child from R evaluation .... */
 	if (s && Rf_asInteger(s))
 	    flags |= RIF_FORK;
 	s = findArg(args, "parse.headers", 0);
@@ -120,8 +128,9 @@ SEXP C_parse_headers(SEXP sWhat) {
     return r_http_parse_headers((const char*)RAW(sWhat), (int) LENGTH(sWhat));
 }
 
-SEXP C_start(SEXP sPort, SEXP sThreads) {
-    int http_port = asInteger(sPort), threads = asInteger(sThreads); /*, i = 0, flags = 0, tls_info = 0; */
+SEXP C_start(SEXP sPort, SEXP sSock, SEXP sThreads, SEXP sFork, SEXP sIPv6) {
+    int http_port = asInteger(sPort), threads = asInteger(sThreads); /* tls_info = 0; */
+    int use_fork = asInteger(sFork), use_ip6 = asInteger(sIPv6) > 0, flags = 0;
     int active_servers = 0;
     const char *doc_root = "./";
 
@@ -132,11 +141,24 @@ SEXP C_start(SEXP sPort, SEXP sThreads) {
 
     ulog_set_app_name("Rwebserver");
 
+    if (use_fork && threads > 0) {
+	Rf_warning("fork=TRUE and threads > 0 are mutually exclusive, setting threads to 0");
+	threads = 0;
+    }
+
     r_inline_setup(threads > 0 ? RIF_ASYNC : 0);
+
+    if (use_fork)
+	flags |= SRV_FORK;
+    if (threads > 0)
+	flags |= SRV_ASYNC_PROCESS;
+    if (use_ip6)
+	flags |= SRV_IPV6;
+    /* we do not allow SRV_ASYNC_ACCEPT just yet, but we could ... */
 
     server_t *http_server = 0;
     if (http_port > 0) {
-	http_server = create_HTTP_server(http_port, (threads > 0) ? SRV_ASYNC_PROCESS : 0, http_request, 0);
+	http_server = create_HTTP_server(http_port, flags, http_request, 0);
 	if (http_server) {
 	    ulog_info("started HTTP server on port %d", http_port);
 	    active_servers++;

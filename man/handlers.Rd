@@ -62,7 +62,21 @@ found.
   This handler calls an R function with the same API as the internal R
   server and Rserve.
 
-  \code{addHandler("rfun", prefix, FUN, stop=FALSE)}
+  \code{addHandler("rfun", prefix, FUN, parse.query=TRUE,
+    parse.headers=TRUE, fork=FALSE)}
+
+  \itemize{
+    \item{FUN}{function to call for a request (see below for details)}
+    \item{parse.query}{logical, if \code{TRUE} then the query string is
+      parsed into a named character vector, otherwise it is just one
+      string (see below)}
+    \item{parse.headers}{logical, if \code{TRUE} then the headers are
+      parsed (see below), otherwise just a raw vector}
+    \item{fork}{logical, if \code{TRUE} then the R processing will be
+      delegated to forked workers, one per each I/O thread (not
+      available on Widnows). Otherwise the R code is evaluated in the
+      current session.}
+  }
 
   The function \code{FUN} should have the following signature:
 
@@ -75,17 +89,17 @@ found.
       parsed into a named character vector, so, e.g. the query string
       \code{"a=1&b=foo"} will be parsed into R object
       \code{c(a="1", b="foo")}. Otherwise it is just the string itself.}
-    \item{body}{body part of the reqeust or \code{NULL} if there is no
+    \item{body}{body part of the request or \code{NULL} if there is no
       body. If \code{parse.body=TRUE} then an attempt is made to decode
       known body types such as multipart messages (file
-      uploads). Otherwise it is a raw vector.}
+      uploads) and JSON. Otherwise it is a raw vector.}
     \item{headers}{request headers. It is a raw vector unless
       \code{parse.headers=TRUE} in which case the headers are parsed
       into a named list where the header names are lowercase and the
-      \code{"-"} character is replaces by \code{"."} so, for example,
+      \code{"-"} character is replaced by \code{"."} so, for example,
       \code{User-Agent} is stored in the \code{user.agent} element of
-      the list. Note that the parsing is experimental, sicne the
-      interpretation can vary between header entries. Note that at the
+      the list. Note that the parsing is experimental, since the
+      interpretation can vary among header entries. Note that at the
       very least the \code{request.method} entry is always present and
       contains the request method name (\code{GET}, \code{POST}, etc.).}
     \item{...}{reserved for future extensions}
@@ -102,7 +116,7 @@ found.
       body of the result to return to the client. As a special case, the
       result can be a named list entry and have either \code{file} or
       \code{tempfile} name in which case the result is interpreted as a
-      path to a file whose contents will be served. In the cased of
+      path to a file whose contents will be served. In the case of
       \code{tempfile} the file will be removed once read.}
     \item{content.type}{string, MIME type of the result, defaults to
       \code{"text/html"}}
@@ -112,6 +126,13 @@ found.
     \item{http.code}{integer, valid HTTP code (100..999), defaults to
       200L}
   }
+
+  One exception is that returning \code{FALSE} indicates that the
+  handler has refused to process the request and so the search should
+  continue to the next handler. Note that due to the relatively
+  expensive nature of some evaluation methods (such as worker
+  communication) it is recommended to consolidate R handlers instead of
+  relying on each to signal its unwillingness to process the reqeust.
 
   If the returned object has any other form (e.g. if it is a character
   vector), it is assumed to be an error and it will result in 500 HTTP
@@ -130,7 +151,7 @@ found.
   The \code{prefix} can contain the \code{?} character as a wildcard
   which will match any number of characters other than \code{/}. The
   matched content is the avaiable in the form of \code{$n} variables in
-  the \code{replacement} where \code{n} is one of the intereeger 1..9.
+  the \code{replacement} where \code{n} is one of the integers 1..9.
   If the request prefix is matched then it is replaced by the
   \code{replacement}.
 
@@ -143,7 +164,7 @@ found.
   string.
 
   The \code{stop} parameter only applies to subsequent rewrite requests,
-  because the rewrite handler is not an actual contant handler, it will
+  because the rewrite handler is not an actual content handler, it will
   still proceed to other content handlers regardless of the value of
   \code{stop}, but setting \code{stop=TRUE} will make sure that no more
   rewrite handlers will be consulted.
