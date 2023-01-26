@@ -366,9 +366,18 @@ void async_queue_process(async_queue *q, double timeout) {
 		DBG(ulog_debug(" - async_queue_process calling process() on %p (%d)", (void*) c->conn, c->conn->info.s));
 		c->conn->info.srv->process(c->conn);
 		DBG(ulog_debug(" - async_queue_process process() returned on %p (%d)", (void*) c->conn, c->conn->info.s));
+		int block_state = ACS_PROCESSING;
+		if (c->conn->info.s != INVALID_SOCKET) { /* check whether this clears the ready state */
+		    fd_set fds;
+		    struct timeval tv = { 0, 0 };
+		    FD_ZERO(&fds);
+		    FD_SET(c->conn->info.s, &fds);
+		    if (select(c->conn->info.s + 1, &fds, 0, 0, &tv) < 1) /* not ready */
+			block_state |= ACS_READY;
+		}
 		/* lock to signal we're done */
 		pthread_mutex_lock(&(q->mux));
-		c->state &= ~ACS_PROCESSING;
+		c->state &= ~block_state;
 		pthread_mutex_unlock(&(q->mux));
 		return; /* done */
 	    }

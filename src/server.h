@@ -6,22 +6,24 @@
 #endif
 
 /* this is a voluntary standard flag to request TLS support */
-#define SRV_TLS            0x0800
+#define SRV_TLS            0x00800
 /* this is a voluntary standard flag to request asynchronous behavior */
-#define SRV_ASYNC_ACCEPT   0x0200 /* the accept() will be performed on a separate thread */
-#define SRV_ASYNC_PROCESS  0x0100 /* recv/send for client connections on a separate thread */
+#define SRV_ASYNC_ACCEPT   0x00200 /* the accept() will be performed on a separate thread */
+#define SRV_ASYNC_PROCESS  0x00100 /* recv/send for client connections on a separate thread */
+#define SRV_LOG            0x00400 /* enable logging */
 
 /* these flags are global and respected by the default socket server */
-#define SRV_IPV6      0x1000 /* use IPv6 */
-#define SRV_LOCAL     0x4000 /* bind to local loopback interface only */
-#define SRV_KEEPALIVE 0x8000 /* enable keep-alive - note that this is really
-							    a client option sice inheritance is not
-								guaranteed */
-#define SRV_INIT_RNG  0x0400 /* request separate RNG for each connection
-								(if not set, forked servers may yield
-								identical RNG chains) */
-#define SRV_FORK      0x2000 /* fork on accept (mutually exclusive with
-								SRV_ASYNC_*) */
+#define SRV_IPV6      0x01000 /* use IPv6 */
+#define SRV_LOCAL     0x04000 /* bind to local loopback interface only */
+#define SRV_KEEPALIVE 0x08000 /* enable keep-alive - note that this is really
+								 a client option sice inheritance is not
+								 guaranteed */
+#define SRV_FORK      0x02000 /* fork on accept (mutually exclusive with
+								 SRV_ASYNC_*) */
+#define SRV_NONBLOCK  0x10000 /* use non-blocking connections */
+#define SRV_INIT_RNG  0x20000 /* request separate RNG for each connection
+								 (if not set, forked servers may yield
+								 identical RNG chains) */
 
 #include <unistd.h>
 #include <stddef.h>
@@ -148,6 +150,14 @@ void serverLoop(void);
    pipes, setting see, uid/gid, cwd etc.
    returns 0 for the child */
 int prepare_child(client_connection_t *arg);
+
+/* set blocking flag on a connection. Note that this should only
+   be used by implementations of virtual servers, since real
+   servers set the blocking behavior based on the SRV_NONBLOCK
+   server flag.
+   Returns 0 on success.
+*/
+int client_set_blocking(client_connection_t *conn, int block);
 
 /* this one is called by the former to close all server sockets in the child */
 void close_all_srv_sockets(void);

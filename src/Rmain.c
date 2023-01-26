@@ -27,8 +27,10 @@
 #include <Rinternals.h>
 
 static void http_request(http_request_t *req, http_result_t *res) {
-    char date[32];
-    ulog_info("request for '%s', Date: %s, headers:\n%s\n", req->url, posix2http(req->date, date), req->headers ? req->headers : "<NONE>");
+    DBG({
+	    char date[32];
+	    ulog_info("request for '%s', Date: %s, headers:\n%s\n", req->url, posix2http(req->date, date), req->headers ? req->headers : "<NONE>");
+	});
 
     sanitize_path(req->url);
     if (!call_content_handlers(req, res)) {
@@ -128,14 +130,26 @@ SEXP C_parse_headers(SEXP sWhat) {
     return r_http_parse_headers((const char*)RAW(sWhat), (int) LENGTH(sWhat));
 }
 
-SEXP C_start(SEXP sPort, SEXP sSock, SEXP sThreads, SEXP sFork, SEXP sIPv6) {
+SEXP C_start(SEXP sPort, SEXP sSock, SEXP sThreads, SEXP sFork, SEXP sIPv6, SEXP sLocal) {
     int http_port = asInteger(sPort), threads = asInteger(sThreads); /* tls_info = 0; */
     int use_fork = asInteger(sFork), use_ip6 = asInteger(sIPv6) > 0, flags = 0;
+    int use_local = asInteger(sLocal);
     int active_servers = 0;
+    const char *sock = 0;
     const char *doc_root = "./";
 
     if (!list_content_handlers(0, 0))
 	Rf_warning("No content handlers are registered, all responses will be 404.");
+
+    if (TYPEOF(sSock) == STRSXP && LENGTH(sSock) == 1)
+	sock = CHAR(STRING_ELT(sSock, 0));
+    else if (sSock != R_NilValue)
+	Rf_error("Invalid value for `socket', must be a string or NULL");
+
+#ifdef WIN32
+    if (sock)
+	Rf_error("Local sockets are not supported by Windows");
+#endif
 
     begin_pool("Rmain");
 
@@ -151,22 +165,33 @@ SEXP C_start(SEXP sPort, SEXP sSock, SEXP sThreads, SEXP sFork, SEXP sIPv6) {
     if (use_fork)
 	flags |= SRV_FORK;
     if (threads > 0)
-	flags |= SRV_ASYNC_PROCESS;
+	flags |= (SRV_ASYNC_PROCESS | SRV_NONBLOCK);
     if (use_ip6)
 	flags |= SRV_IPV6;
+    if (use_local)
+	flags |= SRV_LOCAL;
     /* we do not allow SRV_ASYNC_ACCEPT just yet, but we could ... */
+    DBG(flags |= SRV_LOG);
 
     server_t *http_server = 0;
-    if (http_port > 0) {
-	http_server = create_HTTP_server(http_port, flags, http_request, 0);
-	if (http_server) {
-	    ulog_info("started HTTP server on port %d", http_port);
-	    active_servers++;
-	    if (threads > 0)
-		http_start_threads(threads);
+    http_server = create_HTTP_server(http_port, sock, flags, http_request, 0);
+    if (http_server) {
+	if (!sock) {
+	    client_connection_info_t info;
+	    if (!server_get_info(http_server, &info))
+		ulog_info("started HTTP server on %s port %d",
+			      (info.sa.ip4.sin_family == AF_INET) ? "IPv4" : "IPv6",
+			  (int) ntohs(info.sa.ip4.sin_port));
+	    else
+		ulog_info("started HTTP server on port %d", http_port);
 	} else
-	    Rf_error("failed to start HTTP server on port %d", http_port);
-    }
+	    ulog_info("started HTTP server on socket '%s'", sock);
+	active_servers++;
+	if (threads > 0)
+	    http_start_threads(threads);
+    } else
+	Rf_error("failed to start HTTP server on port %d", http_port);
+
     if (!active_servers)
 	Rf_error("there are no active servers, aborting.");
     ulog_info("starting server loop (http=%d, doc_root='%s')", http_port, doc_root);

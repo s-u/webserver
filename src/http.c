@@ -206,6 +206,20 @@ static int send_response(client_connection_t *c, const char *buf, size_t len)
 		int send_len = ((len - i) > MAX_SEND_LEN) ? MAX_SEND_LEN : ((int) (len - i));
 		int n = srv->send(c, buf + i, send_len);
 		if (n < 1) {
+			/* FIXME: we're not setup well for blocking sends - we could to this
+			   asynchronously by managing the buffer to send, but for now
+			   we are fully synchronous even on non-blocking connections */
+			if (n < 0 && (errno == EWOULDBLOCK || errno == EAGAIN)) {
+				fd_set sfs, efs;
+				FD_ZERO(&sfs);
+				FD_ZERO(&efs);
+				FD_SET(c->info.s, &sfs);
+				FD_SET(c->info.s, &efs);
+				select(c->info.s + 1, 0, &sfs, &efs, 0);
+				/* we don't even bother checking what triggered it, because
+				   both will cause send() to return one way or another */
+				continue;
+			}
 			/* FIXME: what about EINTR? */
 			return -1;
 		}
@@ -334,7 +348,8 @@ static void process_request(client_connection_t *c)
 		req.processing_flags = 0;
 		req.content_type = c->content_type;
 		c->aux->http_handler(&req, &res);
-		web_log(&req, &res);
+		if (c->info.srv->flags & SRV_LOG)
+			web_log(&req, &res);
 		if (headers) {
 			free(headers);
 			headers = 0;
@@ -541,9 +556,11 @@ static void http_input_iteration(client_connection_t *c) {
     if (c->part < PART_BODY) {
 		char *s = c->line_buf;
 		n = srv->recv(c, c->line_buf + c->line_pos, LINE_BUF_SIZE - c->line_pos - 1);
-		DBG(ulog_debug("[recv n=%d, line_pos=%d, part=%d]", n, c->line_pos, (int)c->part));
+		DBG(ulog_debug("[recv n=%d, line_pos=%d, part=%d, errno=%d]", n, c->line_pos, (int)c->part, (n < 0) ? errno : 0));
 		if (n < 0) { /* error, scrap this worker */
-			http_close(c);
+			/* some cases are benign */
+			if (errno != EWOULDBLOCK && errno != EAGAIN && errno != EINTR)
+				http_close(c);
 			end_pool();
 			return;
 		}
@@ -813,10 +830,13 @@ static void http_input_iteration(client_connection_t *c) {
 		if (c->body_pos < c->content_length) { /* need to receive more ? */
 			DBG(ulog_debug("BODY: body_pos=%d, content_length=%ld", c->body_pos, c->content_length));
 			n = srv->recv(c, c->body + c->body_pos, c->content_length - c->body_pos);
-			DBG(ulog_debug("      [recv n=%d - had %u of %lu]", n, c->body_pos, c->content_length));
+			DBG(ulog_debug("      [recv n=%d - had %u of %lu; errno=%d]",
+						   n, (unsigned)c->body_pos, (unsigned long) c->content_length, (n < 0) ? errno : 0));
 			c->line_pos = 0;
 			if (n < 0) { /* error, scrap this worker */
-				http_close(c);
+				/* some cases are benign */
+				if (errno != EWOULDBLOCK && errno != EAGAIN && errno != EINTR)
+					http_close(c);
 				end_pool();
 				return;
 			}
@@ -972,13 +992,13 @@ int http_finish_threads() {
 }
 
 #ifdef NO_WEBSOCKETS
-server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, void *ws_connected)
+server_t *create_HTTP_server(int port, const char *sock, int flags, http_handler_fn_t handler, void *ws_connected)
 #else
-server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, ws_connected_fn_t ws_connected)
+server_t *create_HTTP_server(int port, const char *sock, int flags, http_handler_fn_t handler, ws_connected_fn_t ws_connected)
 #endif
 {
-	server_t *srv = create_server(port, 0, 0, flags);
-	DBG(ulog_debug("create_HTTP_server(port = %d, flags=0x%x)", port, flags));
+	server_t *srv = create_server(port, sock, 0, flags);
+	DBG(ulog_debug("create_HTTP_server(port=%d, sock=%s, flags=0x%x)", port, sock ? sock : "<NONE>", flags));
 	if (srv) {
 		struct aux_pass *aux = (struct aux_pass*) malloc(sizeof(struct aux_pass));
 		if (!aux) return 0;  /* FIXME: release srv? */

@@ -4,6 +4,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <fcntl.h>
 
 #include "dalloc.h"
 
@@ -88,6 +89,18 @@ void close_all_srv_sockets(void) {
 	}
 }
 
+static int set_blocking(SOCKET s, int block) {
+#ifdef WIN32
+	unsigned long mode = block ? 0 : 1;
+	return ioctlsocket(s, FIONBIO, &mode);
+#else
+	int flags = fcntl(s, F_GETFL, 0);
+	if (flags == -1) return -1;
+	flags = block ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
+	return fcntl(s, F_SETFL, flags);
+#endif
+}
+
 /* provides client socket from accept() to the server so that it can
    modify the socket as needed according to the server flags */
 static void accepted_server(client_connection_t *conn) {
@@ -100,6 +113,14 @@ static void accepted_server(client_connection_t *conn) {
 		setsockopt(conn->info.s, SOL_SOCKET, SO_KEEPALIVE, &ka, sizeof(ka));
 	}
 #endif
+	if (conn->info.srv->flags & SRV_NONBLOCK)
+		set_blocking(conn->info.s, 0);
+}
+
+int client_set_blocking(client_connection_t *conn, int block) {
+	if (!conn)
+		return -1;
+	return set_blocking(conn->info.s, block);
 }
 
 int server_get_info(server_t *srv, client_connection_info_t *info) {
@@ -116,7 +137,7 @@ int server_get_info(server_t *srv, client_connection_info_t *info) {
 	if (srv->unix_socket)
 		len = sizeof(info->sa.un);
 #endif
-	if (!getsockname(srv->ss, (struct sockaddr*) &info->sa, &len))
+	if (getsockname(srv->ss, (struct sockaddr*) &info->sa, &len))
 		return -2;
 	return 0;
 }
@@ -517,19 +538,21 @@ void serverLoop(void) {
 
 					/* is this connection allowed? */
 					if (!srv->filter || srv->unix_socket || conn_filter_allowed(srv->filter, &conn->info)) {
-						DBG(ulog_debug("accepted connection for server %p, calling connected", (void*) srv));
+						DBG(ulog_debug("serverLoop: accepted connection for server %p, calling connected", (void*) srv));
 
 						srv->connected(conn);
 						succ = 1;
 #ifndef WIN32
-						/* when the child returns it means it's done (likely an error)
+						/* when the child returns it means it's done,
 						   but it is forked, so the only right thing to do is to exit */
-						if ((srv->flags & SRV_FORK) && is_child)
+						if ((srv->flags & SRV_FORK) && is_child) {
+							DBG(ulog_debug("serverLoop: child pid=%d done, terminating", (int) getpid()));
 							exit(2);
+						}
 #endif
 					} else {
 						/* FIXME: log only in debug mode? */
-						DBG(ulog_info("peer is not on allowed IP list, closing connection"));
+						DBG(ulog_info("serverLoop: peer did not pass connection filter, closing connection"));
 						closesocket(conn->info.s);
 						conn->info.s = -1;
 					}
@@ -558,14 +581,14 @@ int prepare_child(client_connection_t *args) {
 	if (args && args->info.srv && (args->info.srv->flags & SRV_FORK)) {
 		pid_t lastChild;
 		if (is_child) return 0; /* this is a no-op if we are already a child
-								   FIXME: thould this be an error ? */
+								   FIXME: should this be an error ? */
 
 		if ((lastChild = RS_fork(args)) != 0) { /* parent/master part */
 			int forkErrno = errno; /* grab errno close to source before it can be changed by other failures */
 			/* close the connection socket - the child has it already */
 			closesocket(args->info.s);
 			if (lastChild == -1)
-				ulog_warn("WARNING: fork() failed in prepare_child(): %s", strerror(forkErrno));
+				ulog_warn("fork() failed in prepare_child(): %s", strerror(forkErrno));
 			return lastChild;
 		}
 
@@ -590,7 +613,7 @@ int prepare_child(client_connection_t *args) {
 	}
 #endif /* !WIN32 */
 
-#ifdef CAN_TCP_NODELAY
+#ifdef TCP_NODELAY
     {
      	int opt = 1;
         setsockopt(args->info.s, IPPROTO_TCP, TCP_NODELAY, (const char*) &opt, sizeof(opt));

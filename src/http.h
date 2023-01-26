@@ -86,9 +86,9 @@ int http_finish_threads();
 #define HTTP_RAW_BODY   0x20 /* if set, no attempts are made to decode the request body of known types */
 
 #ifdef NO_WEBSOCKETS
-server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, void *dummy);
+server_t *create_HTTP_server(int port, const char *sock, int flags, http_handler_fn_t handler, void *dummy);
 #else
-server_t *create_HTTP_server(int port, int flags, http_handler_fn_t handler, ws_connected_fn_t ws_connected);
+server_t *create_HTTP_server(int port, const char *sock, int flags, http_handler_fn_t handler, ws_connected_fn_t ws_connected);
 #endif
 
 #endif
