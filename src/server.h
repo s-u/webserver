@@ -20,6 +20,8 @@
 #define SRV_INIT_RNG  0x0400 /* request separate RNG for each connection
 								(if not set, forked servers may yield
 								identical RNG chains) */
+#define SRV_FORK      0x2000 /* fork on accept (mutually exclusive with
+								SRV_ASYNC_*) */
 
 #include <unistd.h>
 #include <stddef.h>
@@ -77,10 +79,15 @@ typedef struct client_connection_info {
     SOCKET s;           /* socket for communication with the client */
 	int flags;          /* flags - low 8 bits are reserved */
 	void *ssl;          /* pointer for use in SSL/TLS */
-    SAIN sa;            /* address of the peer */
-#ifndef WIN32
-    struct sockaddr_un su;
+	union sau {         /* address of the peer */
+		struct sockaddr_in  ip4;
+#ifdef HAVE_IPV6
+		struct sockaddr_in6 ip6;
 #endif
+#ifndef WIN32
+		struct sockaddr_un  un;
+#endif
+	} sa;
 } client_connection_info_t;
 
 typedef struct server server_t;
@@ -109,12 +116,15 @@ struct server {
 	conn_fn_t conn_fin;   /* connection finalizer */
 	srv_fn_t  fin;        /* optional server finalization */
 	struct server *parent;/* parent server - used only by multi-layer servers */
+	struct conn_filter *filter;  /* connection filter */
 	void   *aux;          /* auxiliary data; if used, you may want to set fin above */
 };
 
 server_t *create_server(int port, const char *localSocketName, int localSocketMode, int flags);
 int add_server(server_t *srv);
 int rm_server(server_t *srv);
+
+int server_get_info(server_t *srv, client_connection_info_t *info);
 
 /* creates a virtual server that is used to accept connections */
 server_t *create_accept_server(server_t *srv);

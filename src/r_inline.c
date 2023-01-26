@@ -228,6 +228,11 @@ void r_inline_process(http_request_t *req, http_result_t *res, SEXP sFun, int fl
 	    break;
 	}
 
+	if (TYPEOF(x) == LGLSXP && LENGTH(x) == 1 && !asInteger(x)) { /* FALSE => did not process */
+	    res->flags |= RF_REFUSED;
+	    break;
+	}
+
 	if (TYPEOF(x) == VECSXP && LENGTH(x) > 0) { /* a list (generic vector) can be a real payload */
 	    SEXP xNames = getAttrib(x, R_NamesSymbol);
 	    if (LENGTH(x) > 1) {
@@ -383,6 +388,10 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 		old_worker->info.srv->conn_fin(old_worker);
 	    free(old_worker);
 	}
+	if (res->flags & RF_REFUSED) {
+	    res->flags &= ~RF_REFUSED;
+	    return 0;
+	}
 	return 1;
     }
 
@@ -392,5 +401,9 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     if (r_queue)
 	async_queue_end(r_queue);
     end_pool();
+    if (res->flags & RF_REFUSED) {
+	res->flags &= ~RF_REFUSED;
+	return 0;
+    }
     return 1;
 }

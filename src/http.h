@@ -51,6 +51,11 @@ typedef struct {
 #define RF_IS_SUBSET  2  /* if set the the result handler should assume
 			    that the payload already reflects the requested
 			    range (otherwise it will extract the range) */
+#define RF_REFUSED    8  /* this an internal flag is set by handers that matched,
+			    but for some reason decided not to process the request
+			    and they cannot use the return value to signal that.
+			    It is only used for internal communication and
+			    shold not be seen outside of internal code. */
 
 /* all members are set to 0 before a handler is called.
    non-NULL pointers will be free()d once the request is
