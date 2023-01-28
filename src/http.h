@@ -80,6 +80,8 @@ int http_request_set_url(http_request_t *req, const char *path, const char *quer
 int http_start_threads(int n);
 int http_finish_threads();
 
+void http_free_result(http_result_t* res);
+
 /* flags */
 #define HTTP_WS_UPGRADE 0x10 /* allow WebSockets UPGRADE */
 /* Note: the following was used in Rserve, but has no effect here */

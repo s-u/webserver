@@ -167,19 +167,6 @@ static int async_queue_add_(async_queue *q, client_connection_t *conn, int lock)
     ac->state = 0;
     if (lock) pthread_mutex_lock(&(q->mux));
 
-    /* in the unlikely case of too many connections we re-allocate the poll list */
-    if (q->n >= q->pf_alloc) {
-	size_t nalloc = q->pf_alloc * 2;
-	struct pollfd *npf = (struct pollfd *) malloc(sizeof(struct pollfd) * nalloc);
-	if (!npf) {
-	    if (lock) pthread_mutex_unlock(&(q->mux));
-	    return -1;
-	}
-	if (q->pf != q->pf_)
-	    free(q->pf);
-	q->pf = npf;
-    }
-
     if (q->active) {
 	if (!q->head)
 	    q->head = q->tail = ac;
@@ -257,8 +244,22 @@ void async_queue_poll(async_queue *q, double timeout) {
     DBG(ulog_debug("async_queue_process(%p): obtaining mutex", (void*) q));
     pthread_mutex_lock(&(q->mux));
     DBG(ulog_debug(" - got mutex (%p)", (void*) q));
+
+    /* in the unlikely case of too many connections we re-allocate the poll list */
+    if (q->n >= q->pf_alloc) {
+	size_t nalloc = q->pf_alloc * 2;
+	struct pollfd *npf = (struct pollfd *) malloc(sizeof(struct pollfd) * nalloc);
+	if (!npf)
+	    /* we are in real trouble if we cannot allocate memory ... not much we can do ... */
+	    return;
+	q->pf_alloc = nalloc;
+	if (q->pf != q->pf_)
+	    free(q->pf);
+	q->pf = npf;
+    }
     /* collect all valid connections, remove closed ones */
     n = async_queue_setup_poll(q, 1);
+
     pthread_mutex_unlock(&(q->mux));
 
     DBG(ulog_debug("async_queue_poll(%p): start poll(%d, %f)", (void*) q, n, timeout));

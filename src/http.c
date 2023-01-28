@@ -276,7 +276,7 @@ static void fin_request(client_connection_t *c) {
 		c->attr |= CONNECTION_CLOSE;
 }
 
-static void free_res(http_result_t* res) {
+void http_free_result(http_result_t* res) {
 	if (res->err) free(res->err);
 	if (res->payload) free(res->payload);
 	if (res->content_type) free(res->content_type);
@@ -341,12 +341,13 @@ static void process_request(client_connection_t *c)
 		req.body_len = c->body_pos;
 		req.query = query;
 		req.fragment = fragment;
+		req.content_type = c->content_type;
 		req.headers = headers ? headers->buf : 0;
+		req.auth = c->auth;
 		req.date = c->req_date;
 		memcpy(req.method, c->method8, 7);
 		req.method[7] = 0;
 		req.processing_flags = 0;
-		req.content_type = c->content_type;
 		c->aux->http_handler(&req, &res);
 		if (c->info.srv->flags & SRV_LOG)
 			web_log(&req, &res);
@@ -385,7 +386,7 @@ static void process_request(client_connection_t *c)
 			if (c->method != METHOD_HEAD)
 				send_response(c, res.err, strlen(res.err));
 			c->attr |= CONNECTION_CLOSE; /* force close */
-			free_res(&res);
+			http_free_result(&res);
 			end_pool();
 			return;
 		}
@@ -443,6 +444,7 @@ static void process_request(client_connection_t *c)
 						/* FIXME: we just pretend that 0-length is ok, but it's not! */
 						ulog_warn("attempt to serve '%s', but it cannot be opened", fn);
 						send_response(c, "Content-Length: 0\r\n\r\n", 23);
+						http_free_result(&res);
 						fin_request(c);
 						end_pool();
 						return;
@@ -467,7 +469,7 @@ static void process_request(client_connection_t *c)
 									ulog_warn("read error (%s) while reading '%s'",
 											  strerror(errno), fn);
 									free(fbuf);
-									free_res(&res);
+									http_free_result(&res);
 									c->attr |= CONNECTION_CLOSE;
 									fclose(f);
 									if (res.payload_type == PAYLOAD_TEMPFILE) unlink(fn);
@@ -481,7 +483,7 @@ static void process_request(client_connection_t *c)
 						} else { /* allocation error - get out */
 							ulog_error("out of memory when allocating transfer buffer");
 							c->attr |= CONNECTION_CLOSE;
-							free_res(&res);
+							http_free_result(&res);
 							fclose(f);
 							if (res.payload_type == PAYLOAD_TEMPFILE) unlink(fn);
 							end_pool();
@@ -489,7 +491,7 @@ static void process_request(client_connection_t *c)
 						}
 					}
 					fclose(f);
-					free_res(&res);
+					http_free_result(&res);
 					if (res.payload_type == PAYLOAD_TEMPFILE) unlink(fn);
 					fin_request(c);
 					end_pool();
@@ -497,7 +499,7 @@ static void process_request(client_connection_t *c)
 				}
 				sprintf(buf, "Content-Length: 0\r\n\r\n");
 				send_response(c, buf, strlen(buf));
-				free_res(&res);
+				http_free_result(&res);
 				fin_request(c);
 				end_pool();
 				return;
@@ -518,11 +520,11 @@ static void process_request(client_connection_t *c)
 					if (c->method != METHOD_HEAD)
 						send_response(c, res.payload + payload_start, payload_end - payload_start);
 				}
-				free_res(&res);
+				http_free_result(&res);
 				fin_request(c);
 				end_pool();
 				return;
-			}
+			} /* no further branches */
 		}
     }
     send_http_response(c, " 500 Invalid response from handler.\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\nServer error: invalid response from handler.\r\n");

@@ -18,6 +18,7 @@
 #include <time.h>
 #ifndef WIN32
 #include <signal.h>
+#include <sys/wait.h>
 #endif
 
 #include <Rinternals.h>
@@ -71,6 +72,8 @@ static int check_req_hdr(struct rmsg_req *h, size_t mvo) {
 	    (h->auth >= 0 && h->auth >= mvo)) ? 0 : 1;
 }
 
+/* IMPORTANT: the resulting request header just uses pointers into the msg,
+   so it may NOT be freed by anyone else */
 static size_t build_request_hdr(http_request_t *r, struct rmsg *msg, char *buf, size_t buf_len) {
     int32_t len = 0, il;
 #define MSG_INSERT(R, H) if (R) {\
@@ -94,11 +97,12 @@ static size_t build_request_hdr(http_request_t *r, struct rmsg *msg, char *buf, 
     return (size_t) len;
 }
 
-static void parse_request_hdr(http_request_t *r, struct rmsg *msg, const char *buf) {
+static void parse_request_hdr(http_request_t *r, struct rmsg *msg, char *buf) {
     DBG(ulog_debug("r_ext: parse_request_hdr: path=%d, query=%d, fragment=%d, ctype=%d, headers=%d [%d/%d]",
 		   msg->h.req.path, msg->h.req.query, msg->h.req.fragment,
 		   msg->h.req.content_type, msg->h.req.headers,
 		   (int) msg->hdr_len, (int) msg->body_len));
+#ifdef CLONE_REQ
     http_request_set_url(r,
 			 (msg->h.req.path >= 0) ? (buf + msg->h.req.path) : 0,
 			 (msg->h.req.query >= 0) ? (buf + msg->h.req.query) : 0,
@@ -112,8 +116,16 @@ static void parse_request_hdr(http_request_t *r, struct rmsg *msg, const char *b
     if (r->auth)
 	free(r->auth);
     r->auth = (msg->h.req.auth >= 0) ? strdup(buf + msg->h.req.auth) : 0;
+#else
+    r->url = (msg->h.req.path >= 0) ? (buf + msg->h.req.path) : 0;
+    r->query = (msg->h.req.query >= 0) ? (buf + msg->h.req.query) : 0;
+    r->fragment = (msg->h.req.fragment >= 0) ? (buf + msg->h.req.fragment) : 0;
+    r->content_type = (msg->h.req.content_type >= 0) ? (buf + msg->h.req.content_type) : 0;
+    r->headers = (msg->h.req.headers >= 0) ? (buf + msg->h.req.headers) : 0;
+    r->auth = (msg->h.req.auth >= 0) ? (buf + msg->h.req.auth) : 0;
     r->date = msg->date;
     r->processing_flags = msg->h.req.processing_flags;
+#endif
 }
 
 static size_t build_response_hdr(http_result_t *r, struct rmsg *msg, char *buf, size_t buf_len) {
@@ -130,22 +142,39 @@ static size_t build_response_hdr(http_result_t *r, struct rmsg *msg, char *buf, 
     return (size_t) len;
 }    
 
-static void parse_response_hdr(http_result_t *r, struct rmsg *msg, char *buf) {
-    /* not sure - we could perhaps avoid the copies ... */
-#define CL(X) strdup(X)
-    if (r->headers)
-	free(r->headers);
-    r->headers = (msg->h.res.headers >= 0) ? CL(buf + msg->h.res.headers) : 0;
-    if (r->content_type)
-	free(r->content_type);
-    r->content_type = (msg->h.res.content_type >= 0) ? CL(buf + msg->h.res.content_type) : 0;
-    if (r->err)
-	free(r->err);
-    r->err = (msg->h.res.err >= 0) ? CL(buf + msg->h.res.err) : 0;
+static void parse_response_hdr(http_result_t *r, struct rmsg *msg, char *buf, int clone) {
+    if (clone) { /* the result must be legal, i.e. everything copied */
+	if (r->headers)
+	    free(r->headers);
+	r->headers = (msg->h.res.headers >= 0) ? strdup(buf + msg->h.res.headers) : 0;
+	if (r->content_type)
+	    free(r->content_type);
+	r->content_type = (msg->h.res.content_type >= 0) ? strdup(buf + msg->h.res.content_type) : 0;
+	if (r->err)
+	    free(r->err);
+	r->err = (msg->h.res.err >= 0) ? strdup(buf + msg->h.res.err) : 0;
+	if (r->payload)
+	    free(r->payload);
+	if (msg->body_len) {
+	    r->payload = malloc(msg->body_len);
+	    if (r->payload)
+		memcpy(r->payload, buf + msg->hdr_len, msg->body_len);
+	    else {
+		ulog_error("r_ext.parse_response_hdr: cannot allocate memory for body (%lu bytes)",
+			   (unsigned long) msg->body_len);
+		r->code = 500;
+		return;
+	    }
+	}
+    } else {
+	r->headers = (msg->h.res.headers >= 0) ? (buf + msg->h.res.headers) : 0;
+	r->content_type = (msg->h.res.content_type >= 0) ? (buf + msg->h.res.content_type) : 0;
+	r->err = (msg->h.res.err >= 0) ? (buf + msg->h.res.err) : 0;
+	r->payload = msg->body_len ? (buf + msg->hdr_len) : 0;
+    }
     r->code = msg->h.res.code;
     r->flags = msg->h.res.flags;
     r->payload_type = msg->h.res.payload_type;
-    r->payload = msg->body_len ? (buf + msg->hdr_len) : 0;
     r->payload_len = msg->body_len;
     r->range_start = msg->h.res.range_start;
     r->range_end = msg->h.res.range_end;
@@ -325,6 +354,9 @@ static void r_process(client_connection_t *c) {
 	    parse_request_hdr(&req, &c->hdr, c->buf);
 	    req.body = c->hdr.body_len ? body : 0;
 	    req.body_len = (size_t) c->hdr.body_len;
+	    /* IMPORTANT: we are relying r_inline_handler NOT changing req,
+	       becasue we use our special references-to-one-big-buffer approach,
+	       so those may not be freed by the handler */
 	    int n = r_inline_handler(&req, &res, c->ri);
 	    if (n) {};
 	    DBG(ulog_debug("r_inline_handler returned %d", n));
@@ -334,7 +366,7 @@ static void r_process(client_connection_t *c) {
 		c->alloc = l + 16;
 		c->buf = (char*) malloc(c->alloc);
 		if (!c->buf) {
-		    /* FIXME: free req? */
+		    /* we freed buf which is all we used for allocation so we're ok */
 		    c->alloc = 0;
 		    closesocket(c->info.s);
 		    c->info.s = INVALID_SOCKET;
@@ -361,6 +393,8 @@ static void r_process(client_connection_t *c) {
 		n = srv->send(c, res.payload, res.payload_len);
 		DBG(ulog_debug("r_ext: send payload (%d/%d)", n, (int) res.payload_len));
 	    }
+	    /* result is allocated by the regular R handler, so that needs freeing */
+	    http_free_result(&res);
 	} else if (c->hdr.cmd == CMD_HTTP_RESP) {
 	    /* we do not handle that here, go out */
 	    return;
@@ -452,7 +486,7 @@ int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t
     if (c->state != RCS_RECVD)
 	/* something went wrong and the connection is closed */
 	return -1;
-    parse_response_hdr(res, &c->hdr, c->buf);
+    parse_response_hdr(res, &c->hdr, c->buf, 1);
     r_msg_finished(c);
     return 0;
 }
@@ -536,6 +570,10 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
 	while (c->info.s != INVALID_SOCKET && c->state != RCS_ABORT) {
 	    r_process(c);
 	}
+	if (c->info.srv->conn_fin)
+	    c->info.srv->conn_fin(c);
+	free(c);
+	free(remote_server);
 	DBG(ulog_debug(" - child process %d terminating", (int) getpid()));
 	exit(0);
     }

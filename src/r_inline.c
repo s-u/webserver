@@ -256,16 +256,22 @@ void r_inline_process(http_request_t *req, http_result_t *res, SEXP sFun, int fl
 		const char *cs = CHAR(STRING_ELT(y, 0));
 		if (TYPEOF(xNames) == STRSXP && LENGTH(xNames) > 0 &&
 		    (!strcmp(CHAR(STRING_ELT(xNames, 0)), "file") || (is_tmp = !strcmp(CHAR(STRING_ELT(xNames, 0)), "tmpfile")))) {
+		    if (res->payload)
+			free(res->payload);
 		    res->payload = strdup(cs);
 		    res->payload_type = is_tmp ? PAYLOAD_TEMPFILE : PAYLOAD_FILE;
 		    break;
 		}
+		if (res->payload)
+		    free(res->payload);
 		res->payload = strdup(cs);
 		res->payload_len = strlen(res->payload);
 		break;
 	    }
 	    if (TYPEOF(y) == RAWSXP) {
 		res->payload_len = XLENGTH(y);
+		if (res->payload)
+		    free(res->payload);
 		res->payload = (char*) malloc(res->payload_len);
 		memcpy(res->payload, RAW(y), res->payload_len);
 		break;
@@ -374,14 +380,6 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 	    return 1;
 	}
 
-	/* FIXME: the payload is tied to the worker's buffer.
-	   Safe but inefficient: copy it */
-	if (res->payload_len) {
-	    char *np = malloc(res->payload_len);
-	    if (np)
-		memcpy(np, res->payload, res->payload_len);
-	    res->payload = np;
-	}
 	if (old_worker) {
 	    DBG(ulog_debug("r_inline: releasing non-functional worker %p", (void*) old_worker));
 	    if (old_worker->info.srv && old_worker->info.srv->conn_fin)
