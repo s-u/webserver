@@ -30,4 +30,4 @@ simple <- function(port=8080L, path=".", prefix="/", index="index.html", start=T
 }
 
 webstart <- function(port=8080L, threads=4L, fork=FALSE, socket, ipv6=FALSE, local=TRUE)
-    .Call("C_start", port, if (missing(socket)) NULL else socket, threads, fork, ipv6, local)
+    .Call(C_start, port, if (missing(socket)) NULL else socket, threads, fork, ipv6, local)
