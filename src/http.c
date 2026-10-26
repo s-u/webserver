@@ -37,6 +37,7 @@
 #define CONTENT_TYPE      0x0040 /* message has a specific content type set */
 #define CONTENT_FORM_UENC 0x0080 /* message content type is application/x-www-form-urlencoded */
 #define WS_UPGRADE        0x0100 /* upgrade to WebSockets protocol */
+#define BAD_LENGTH        0x0200 /* conflicting or malformed Content-Length: */
 
 /* used by http_send_respose to limit the size sent at once. Must be at most 31-bit */
 #define MAX_SEND_LEN (1024*1024)
@@ -595,6 +596,12 @@ static void http_input_iteration(client_connection_t *c) {
 					end_pool();
 					return;
 				}
+				if (c->attr & BAD_LENGTH) {
+					send_http_response(c, " 400 Bad Request (invalid Content-Length)\r\nConnection: close\r\n\r\n");
+					http_close(c);
+					end_pool();
+					return;
+				}
 				if ((c->attr & CONTENT_LENGTH) && c->content_length) {
 					/* FIXME: limit on body size - make it configurable? */
 					if (c->content_length < 0 ||  /* we are parsing signed so negative numbers are bad */
@@ -774,8 +781,14 @@ static void http_input_iteration(client_connection_t *c) {
 							if (!strcmp(bol, "upgrade") && !strcmp(k, "websocket"))
 								c->attr |= WS_UPGRADE;
 							if (!strcmp(bol, "content-length")) {
+								char *ep;
+								long cl = strtol(k, &ep, 10);
+								while (*ep == ' ' || *ep == '\t') ep++;
+								/* the value must be a number and a repeated header must agree */
+								if (ep == k || *ep || ((c->attr & CONTENT_LENGTH) && (size_t) cl != c->content_length))
+									c->attr |= BAD_LENGTH;
 								c->attr |= CONTENT_LENGTH;
-								c->content_length = atol(k);
+								c->content_length = cl;
 							}
 							if (!strcmp(bol, "content-type")) {
 								char *l = k;
