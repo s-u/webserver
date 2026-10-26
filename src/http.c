@@ -85,6 +85,7 @@ struct client_connection {
 	char *auth;                    /* authorization header (if set) */
 	struct buffer *headers;        /* buffer holding header lines */
 	struct aux_pass *aux;
+	int pipelined;                 /* the line buffer already holds the start of the next request */
 };
 
 typedef struct accept_connection {
@@ -545,7 +546,7 @@ static void process_request(client_connection_t *c)
 
 /* this function is called to fetch new data from the client
  * connection socket and process it */
-static void http_input_iteration(client_connection_t *c) {
+static void http_input_iteration_(client_connection_t *c) {
     int n;
 	server_t *srv = c->info.srv;
 
@@ -556,19 +557,17 @@ static void http_input_iteration(client_connection_t *c) {
 
 	begin_pool("http_input_iteration");
 
-    /* FIXME: there is one edge case that is not caught on unix: if
-     * recv reads two or more full requests into the line buffer then
-     * this function exits after the first one, but input handlers may
-     * not trigger, because there may be no further data. It is not
-     * trivial to fix, because just checking for a full line at the
-     * beginning and not calling recv won't trigger a new input
-     * handler. However, under normal circumstance this should not
-     * happen, because clients should wait for the response and even
-     * if they don't it's unlikely that both requests get combined
-     * into one packet. */
+    /* NOTE: if recv reads several requests at once, the first is processed and
+     * `pipelined' makes http_input_iteration() parse the rest without waiting
+     * for socket data that may never arrive (GET/HEAD only; a request with a
+     * body followed by more data still closes the connection). */
     if (c->part < PART_BODY) {
 		char *s = c->line_buf;
-		n = srv->recv(c, c->line_buf + c->line_pos, LINE_BUF_SIZE - c->line_pos - 1);
+		/* a previous request left the start of the next one in the buffer,
+		   so parse that first instead of waiting for more data */
+		int replay = c->pipelined;
+		c->pipelined = 0;
+		n = replay ? 0 : srv->recv(c, c->line_buf + c->line_pos, LINE_BUF_SIZE - c->line_pos - 1);
 		DBG(ulog_debug("[recv n=%d, line_pos=%d, part=%d, errno=%d]", n, c->line_pos, (int)c->part, (n < 0) ? errno : 0));
 		if (n < 0) { /* error, scrap this worker */
 			/* some cases are benign */
@@ -577,7 +576,7 @@ static void http_input_iteration(client_connection_t *c) {
 			end_pool();
 			return;
 		}
-		if (n == 0) { /* connection closed -> try to process and then remove */
+		if (n == 0 && !replay) { /* connection closed -> try to process and then remove */
 			process_request(c);
 			http_close(c);
 			end_pool();
@@ -649,6 +648,7 @@ static void http_input_iteration(client_connection_t *c) {
 					}
 					/* keep-alive - reset the worker so it can process a new request */
 					conn_request_done(c);
+					c->pipelined = (c->line_pos > 0);
 					end_pool();
 					return;
 				}
@@ -902,6 +902,15 @@ static void http_input_iteration(client_connection_t *c) {
 	   because when PART_BODY is set the no-body case is already handled and never gets here.
 	   So the only time we get here is when we did a partial read of the body. */
 	end_pool();
+}
+
+/* processes available input, including requests that were received
+   back-to-back (pipelined) and thus already sit in the line buffer */
+static void http_input_iteration(client_connection_t *c) {
+    if (!c) return;
+    do
+	http_input_iteration_(c);
+    while (c->info.s != INVALID_SOCKET && c->pipelined);
 }
 
 #include "async.h"
