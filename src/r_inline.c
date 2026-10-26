@@ -299,7 +299,12 @@ struct client_connection {
 
 static __thread client_connection_t *worker;
 
+void r_inline_thread_end();
+
 void r_inline_end() {
+    /* the main thread has a worker if R handlers with fork=TRUE were
+       used without processing threads */
+    r_inline_thread_end();
     if (r_queue) {
 	async_queue_finish(r_queue);
 	async_queue_free(r_queue);
@@ -401,7 +406,10 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 			    old_worker->info.srv->conn_fin(old_worker);
 			free(old_worker);
 		    }
-		    return -1;
+		    ulog_error("r_inline: unable to start R worker");
+		    res->code = 500;
+		    end_pool();
+		    return 1;
 		}
 	    }
 	    DBG(ulog_debug("r_inline: switching to r_ext worker at %p (%d)",
@@ -414,6 +422,7 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 	if (opr == -1) { /* internal error in the handler */
 	    res->code = 500;
 	    ulog_error("r_ext worker failed (memory allocation error or worker died)");
+	    end_pool();
 	    return 1;
 	}
 
@@ -423,6 +432,7 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 		old_worker->info.srv->conn_fin(old_worker);
 	    free(old_worker);
 	}
+	end_pool();
 	if (res->flags & RF_REFUSED) {
 	    res->flags &= ~RF_REFUSED;
 	    return 0;

@@ -209,7 +209,10 @@ static void r_conn_fin(client_connection_t *c) {
 	   to register that we are shutting down. In order to do that, we should
 	   create a pool where we send all workers to finish so we don't have to
 	   wait for them one by one */
-	if ((wp = waitpid(c->pid, &stat, WNOHANG)) <= 0) {
+	/* NOTE: the server loop reaps any terminated children, so waitpid() can
+	   fail with ECHILD. Only a result of 0 means the worker is still running
+	   and the pid is safe to signal (otherwise it may have been re-used). */
+	if ((wp = waitpid(c->pid, &stat, WNOHANG)) == 0) {
 	    DBG(ulog_debug("r_ext: r_conn_fin worker %p (pid=%d) has not terminated, sending SIGHUP",
 			   (void*) c, (int) c->pid));
 	    /* that should be enough to break any waiting loops */
@@ -224,7 +227,7 @@ static void r_conn_fin(client_connection_t *c) {
 		struct timespec ts = { 0, 1000000 }; /* 1ms */
 		nanosleep(&ts, NULL);
 	    }
-	    if (wp <= 0) {
+	    if (wp == 0) {
 		/* FIXME: in case there is a problem we may not want to wait indefinitely
 		   see above for a possibly better apporach ...*/
 		kill(c->pid, SIGKILL);
@@ -393,15 +396,12 @@ static void r_process(client_connection_t *c) {
 	    c->hdr.hdr_len = l;
 	    c->hdr.body_len = res.payload_len;
 	    c->hdr.res = 0;
-	    n = srv->send(c, &c->hdr, sizeof(c->hdr));
-	    DBG(ulog_debug("r_ext: send msg header (%d/%d)", n, (int) sizeof(c->hdr)));
-	    if (l) {
-		n = srv->send(c, c->buf, l);
-		DBG(ulog_debug("r_ext: send header (%d/%d)", n, (int) l));
-	    }
-	    if (res.payload_len) {
-		n = srv->send(c, res.payload, res.payload_len);
-		DBG(ulog_debug("r_ext: send payload (%d/%d)", n, (int) res.payload_len));
+	    if (send_all(c, &c->hdr, sizeof(c->hdr), 0, 0) <= 0 ||
+		(l && send_all(c, c->buf, l, 0, 0) <= 0) ||
+		(res.payload_len && send_all(c, res.payload, res.payload_len, 0, 0) <= 0)) {
+		DBG(ulog_debug("r_ext: failed to send response, closing connection"));
+		closesocket(c->info.s);
+		c->info.s = INVALID_SOCKET;
 	    }
 	    /* result is allocated by the regular R handler, so that needs freeing */
 	    http_free_result(&res);
@@ -522,14 +522,11 @@ void r_ext_close(client_connection_t *c) {
 static client_connection_t *work_conn;
 
 #ifndef WIN32
+/* SIGHUP is how the parent tells the worker to go away. Closing the
+   connection is not enough, because workers forked later inherit the
+   parent's end of it, so the worker may never see EOF. */
 static void sighandler(int sig) {
-    DBG(ulog_debug("r_ext: sighandler called"));
-#if 0 /* we could force the connection, but it should not be necessary */
-    if (work_conn && work_conn->info.s != INVALID_SOCKET) {
-	closesocket(work_conn->info.s);
-	work_conn->info.s = INVALID_SOCKET;
-    }
-#endif
+    _exit(0);
 }
 #endif
 
@@ -548,12 +545,16 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
 
     if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ios)) {
 	ulog_error("r_new_worker: socketpair() failed with %s", strerror(errno));
+	free(c);
 	return 0;
     }
     f = fork();
     if (f < 0) {
 	ulog_error("r_new_worker: fork() failed with %s when creating a new worker process",
 		   strerror(errno));
+	closesocket(ios[0]);
+	closesocket(ios[1]);
+	free(c);
 	return 0;
     }
     if (!f) { /* child */
@@ -586,7 +587,11 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
 	free(c);
 	free(remote_server);
 	DBG(ulog_debug(" - child process %d terminating", (int) getpid()));
-	exit(0);
+	/* NOT exit(): that would run atexit handlers and stdio clean-up of the
+	   parent's state. In particular, it re-positions inherited input streams,
+	   which share the file offset with the parent, so e.g. Rscript would
+	   continue reading its script from the wrong place. */
+	_exit(0);
     }
     /* parent */
     closesocket(ios[1]);
