@@ -552,8 +552,11 @@ async_job *async_queue_start_poll_thread(async_queue *q) {
     /* FIXME: we refuse to start a second thread.
        This is likely a non-issue, but in theory if one wanted
        to re-start it due to some failure this could be of interest. */
-    if (q->poll_job || !q->active)
-	return q->poll_job;
+    if (q->poll_job || !q->active) {
+	async_job *pj = q->poll_job;
+	pthread_mutex_unlock(&(q->mux));
+	return pj;
+    }
     async_job *j = async_run(async_job_poll_queue, q);
     q->poll_job = j;
     pthread_mutex_unlock(&(q->mux));
