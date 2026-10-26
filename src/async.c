@@ -532,12 +532,27 @@ void async_queue_free(async_queue *q) {
     }
 }
 
+/* Handlers may evaluate R code on our threads, which can need as much C stack
+   as the main thread, but the default stack of other threads can be small
+   (512kB on macOS), so we make sure the threads have at least this much
+   (Linux defaults to 8Mb).
+   NOTE: on macOS the size must be a multiple of page size (4kB).
+   FIXME: pthread_attr_getstacksize/pthread_attr_setstacksize may not be
+   available on older systems (it is on macOS since 10.4) */
+
+#ifndef ASYNC_STACK_SIZE
+#define ASYNC_STACK_SIZE (8 * 1024 * 1024)
+#endif
+
 async_job *async_run(void * (thr)(void *), void *par) {
     async_job *job = (async_job*) malloc(sizeof(async_job));
+    size_t stack_size = 0;
     if (!job)
 	return job;
 
     pthread_attr_init(&job->thread_attr);
+    if (!pthread_attr_getstacksize(&job->thread_attr, &stack_size) && stack_size < ASYNC_STACK_SIZE)
+	pthread_attr_setstacksize(&job->thread_attr, ASYNC_STACK_SIZE);
     /* pthread_attr_setdetachstate(&job->thread_attr, PTHREAD_CREATE_DETACHED); */
     if (pthread_create(&job->thread, &job->thread_attr, *thr, par)) {
 	free(job);
