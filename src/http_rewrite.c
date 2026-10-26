@@ -18,7 +18,6 @@ typedef struct http_rewrite {
     char *prefix, *replace, *query;
     int placeholders, prefix_len, replace_len, query_has_ph;
     int flags;
-    const char *pos[1];
 } http_rewrite;
 
 void http_rewrite_free(http_rewrite *hr) {
@@ -48,7 +47,7 @@ http_rewrite *http_rewrite_entry(const char *prefix, const char *replace, int fl
 	c++;
     }
 
-    hs = (http_rewrite*) calloc(1, sizeof(http_rewrite) + n * (sizeof(char*) * 2));
+    hs = (http_rewrite*) calloc(1, sizeof(http_rewrite));
     if (!hs)
 	return 0;
     if (!(hs->prefix = strdup(prefix)))
@@ -65,15 +64,15 @@ http_rewrite *http_rewrite_entry(const char *prefix, const char *replace, int fl
     hs->flags = flags;
     /* cached for performance */
     hs->prefix_len = strlen(prefix);
-    hs->replace_len = strlen(replace);
+    hs->replace_len = strlen(hs->replace); /* without the query part */
 
     return hs;
 }
 
-/* replaces $1..$9 with the values stored in r->pos[2*n], writing the
+/* replaces $1..$9 with the values stored in pos[2*n], writing the
    result to dst.
    dst can be NULL in which case it will return the needed size */
-static int do_replace(http_rewrite *r, const char *src, char *dst) {
+static int do_replace(http_rewrite *r, const char **pos, const char *src, char *dst) {
     int n = 0;
     while (*src) {
 	if (*src == '$') {
@@ -81,10 +80,10 @@ static int do_replace(http_rewrite *r, const char *src, char *dst) {
 	    if (*src >= '1' && *src <= '9') {
 		int off = *(src++) - '1', rl = 0;
 		if (off < r->placeholders)
-		    rl = (int) (r->pos[2*off + 1] - r->pos[2*off]);
+		    rl = (int) (pos[2*off + 1] - pos[2*off]);
 		if (rl) {
 		    if (dst) {
-			memcpy(dst, r->pos[2*off], rl);
+			memcpy(dst, pos[2*off], rl);
 			dst += rl;
 		    }
 		    n += rl;
@@ -105,9 +104,15 @@ static int do_replace(http_rewrite *r, const char *src, char *dst) {
     return n;
 }
 
+/* placeholder positions are kept on the stack for up to this many placeholders */
+#define MAX_STACK_PH 8
+
 int http_rewrite_handler(http_request_t *req, http_result_t *res, void *user) {
     http_rewrite *r = (http_rewrite*) user;
     const char *path;
+    /* positions of the placeholder values in the path. They are specific to the
+       request, so they must not be stored in the (shared) handler entry */
+    const char *pos_buf[2 * MAX_STACK_PH], **pos = pos_buf;
 
     /* this should never happen, but just to be safe ... */
     if (!req || !req->url || !r) return 0;
@@ -133,22 +138,30 @@ int http_rewrite_handler(http_request_t *req, http_result_t *res, void *user) {
     } else { /* placeholder replace */
 	int n = 0;
 	const char *src = path, *rule = r->prefix;
+	if (r->placeholders > MAX_STACK_PH &&
+	    !(pos = (const char**) malloc(sizeof(char*) * 2 * r->placeholders))) {
+	    res->code = 500;
+	    end_pool();
+	    return 1;
+	}
 	/* match and record placeholder value locations */
 	while (*src && *rule) {
 	    if (*rule == '?') {
-		r->pos[2*n] = src;
+		pos[2*n] = src;
 		while (*src && *src != '/') src++;
-		r->pos[2*n + 1] = src;
+		pos[2*n + 1] = src;
 		rule++;
 		/* we counted ? so this will not overflow */
 		n++;
 		continue;
 	    } else if (*(src++) != *(rule++)) {
+		if (pos != pos_buf) free(pos);
 		end_pool();
 		return 0; /* mismatch */
 	    }
 	}
 	if (*rule) { /* rule was longer = not a match */
+	    if (pos != pos_buf) free(pos);
 	    end_pool();
 	    return 0;
 	}
@@ -157,51 +170,58 @@ int http_rewrite_handler(http_request_t *req, http_result_t *res, void *user) {
 
 	/* if we got here, it was a match */
 	/* need to find the replacement size */
-	replace_length = do_replace(r, r->replace, 0);
+	replace_length = do_replace(r, pos, r->replace, 0);
     }
 
-    int n, al;
-    char *new_path, *dst, *qs = 0, *new_query = req->query;
+    int n, rq_len = 0;
+    size_t q_len = 0;
+    char *new_path, *dst, *new_query = req->query;
 
     /* length of the remainder of the path */
-    al = n = strlen(path + match_length);
-    if (r->query && req->query) /* replacement also needs a new query */
-	al += strlen(r->query) + strlen(req->query) + 3;
-    new_path = dst = malloc(replace_length + al + 1);
+    n = strlen(path + match_length);
+    /* length of the query part of the replacement (after substitution) */
+    if (r->query) {
+	rq_len = r->query_has_ph ? do_replace(r, pos, r->query, 0) : (int) strlen(r->query);
+	/* request query goes first, separated by & */
+	q_len = (req->query ? strlen(req->query) + 1 : 0) + rq_len + 1;
+    }
+    new_path = dst = malloc(replace_length + n + 1 + q_len);
     if (!dst) {
+	if (pos != pos_buf) free(pos);
 	res->code = 500;
 	end_pool();
 	return 1;
     }
 
-    if (!r->placeholders) { /* fixed rewrite - simple case */    
+    if (!r->placeholders) { /* fixed rewrite - simple case */
 	/* copy replacement path */
 	memcpy(dst, r->replace, r->replace_len);
 	dst += r->replace_len;
     } else /* the rule contains placeholders */
-	dst += do_replace(r, r->replace, dst);
+	dst += do_replace(r, pos, r->replace, dst);
 
     /* append non-replaced part of the path + its NUL */
     memcpy(dst, path + match_length, n + 1);
-    if (r->query && req->query) { /* concatenate queries - request query goes first */
-	new_query = qs = dst + n + 1;
-	strcpy(qs, req->query);
-	qs += strlen(req->query);
-	if (qs > new_query)
-	    *(qs++) = '&';
-    } else if (r->query_has_ph)
-	new_query = qs = dst + n + 1;
-
-    if (r->query_has_ph) { /* we have to also interpret $x in the query replacement part */
-	qs += do_replace(r, r->query, qs);
+    if (r->query) { /* the query is the request query (if any) & replacement query */
+	char *qs = new_query = dst + n + 1;
+	if (req->query) {
+	    strcpy(qs, req->query);
+	    qs += strlen(req->query);
+	    if (qs > new_query)
+		*(qs++) = '&';
+	}
+	if (r->query_has_ph)
+	    qs += do_replace(r, pos, r->query, qs);
+	else {
+	    memcpy(qs, r->query, rq_len);
+	    qs += rq_len;
+	}
 	*qs = 0;
-    } else if (r->query && req->query)
-	strcat(qs, r->query);
+    }
+    if (pos != pos_buf) free(pos);
 
-    if (!new_query) /* it starts with req->query */
-	new_query = r->query;
     DBG(ulog_debug(" - replacing '%s' with '%s%s%s'", req->url, new_path, new_query ? "?" : "", new_query ? new_query : ""));
-    http_request_set_url(req, new_path, new_query ? new_query : r->query, req->fragment);
+    http_request_set_url(req, new_path, new_query, req->fragment);
     free(new_path);
 
     if (r->flags & REWRITE_FLAG_LAST)
