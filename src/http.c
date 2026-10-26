@@ -469,10 +469,11 @@ static void process_request(client_connection_t *c)
 									ulog_warn("read error (%s) while reading '%s'",
 											  strerror(errno), fn);
 									free(fbuf);
-									http_free_result(&res);
 									c->attr |= CONNECTION_CLOSE;
 									fclose(f);
+									/* fn is res.payload, so unlink before freeing it */
 									if (res.payload_type == PAYLOAD_TEMPFILE) unlink(fn);
+									http_free_result(&res);
 									end_pool();
 									return;
 								}
@@ -483,16 +484,16 @@ static void process_request(client_connection_t *c)
 						} else { /* allocation error - get out */
 							ulog_error("out of memory when allocating transfer buffer");
 							c->attr |= CONNECTION_CLOSE;
-							http_free_result(&res);
 							fclose(f);
 							if (res.payload_type == PAYLOAD_TEMPFILE) unlink(fn);
+							http_free_result(&res);
 							end_pool();
 							return;
 						}
 					}
 					fclose(f);
-					http_free_result(&res);
 					if (res.payload_type == PAYLOAD_TEMPFILE) unlink(fn);
+					http_free_result(&res);
 					fin_request(c);
 					end_pool();
 					return;
