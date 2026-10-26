@@ -576,8 +576,10 @@ static void http_input_iteration_(client_connection_t *c) {
 			end_pool();
 			return;
 		}
-		if (n == 0 && !replay) { /* connection closed -> try to process and then remove */
-			process_request(c);
+		if (n == 0 && !replay) { /* connection closed */
+			/* complete requests are processed as soon as they are received,
+			   so anything left is an incomplete request which must not be
+			   passed to the handler */
 			http_close(c);
 			end_pool();
 			return;
@@ -874,10 +876,8 @@ static void http_input_iteration_(client_connection_t *c) {
 				end_pool();
 				return;
 			}
-			if (n == 0) { /* connection closed -> try to process and then remove */
-				/* FIXME: this may not be legal - we didn't get the entrie body,
-				   so we shouldn't really process the request ... */
-				process_request(c);
+			if (n == 0) { /* connection closed before the whole body arrived */
+				/* do not process a request with truncated body */
 				http_close(c);
 				end_pool();
 				return;
