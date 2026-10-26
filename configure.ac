@@ -149,7 +149,7 @@ fi
 AC_MSG_CHECKING([whether TLS/SSL support is enabled])
 AC_MSG_RESULT([${working_tls}])
 if test "x${working_tls}"; then
-   AC_DEFINE(HAS_TLS, 1, [If defined TLS/SSL support is enabled.])
+   AC_DEFINE(HAVE_TLS, 1, [If defined TLS/SSL support is enabled.])
 fi
 
 ## we have removed WebSockets code from this version, so it is always disabled for now
