@@ -44,6 +44,11 @@
 /* used by http_send_respose to limit the size sent at once. Must be at most 31-bit */
 #define MAX_SEND_LEN (1024*1024)
 
+/* seconds without progress after which sending a response is abandoned */
+#ifndef HTTP_SEND_TIMEOUT
+#define HTTP_SEND_TIMEOUT 30
+#endif
+
 /* descriptions to send with 40x status codes, all others will get "Code xxx" instead */
 const char *http_40x[] = { "Bad Request", "Unauthorized", "Payment Required", "Forbidden",
 						   "Not Found", "Method Not Allowed", "Not Acceptable" };
@@ -200,31 +205,46 @@ static void conn_finalize(client_connection_t *c)
 	}
 }
 
+static void http_close(client_connection_t *conn);
+
+/* returns 0 on success, -1 on error. If the client does not accept any data
+   for HTTP_SEND_TIMEOUT seconds, the connection is closed (otherwise a client
+   that stops reading would block the sending thread forever) */
 static int send_response(client_connection_t *c, const char *buf, size_t len)
 {
 	server_t *srv = c->info.srv;
-    unsigned int i = 0;
+    size_t i = 0;
     /* we have to tell R to ignore SIGPIPE otherwise it can raise an error
        and get us into deep trouble */
     while (i < len) {
-		int send_len = ((len - i) > MAX_SEND_LEN) ? MAX_SEND_LEN : ((int) (len - i));
-		int n = srv->send(c, buf + i, send_len);
+		int send_len, n;
+		if (c->info.s == INVALID_SOCKET) /* closed, e.g., by an earlier timeout */
+			return -1;
+		send_len = ((len - i) > MAX_SEND_LEN) ? MAX_SEND_LEN : ((int) (len - i));
+		n = srv->send(c, buf + i, send_len);
 		if (n < 1) {
 			/* FIXME: we're not setup well for blocking sends - we could to this
 			   asynchronously by managing the buffer to send, but for now
 			   we are fully synchronous even on non-blocking connections */
 			if (n < 0 && (errno == EWOULDBLOCK || errno == EAGAIN)) {
 				fd_set sfs, efs;
+				struct timeval tv = { HTTP_SEND_TIMEOUT, 0 };
 				FD_ZERO(&sfs);
 				FD_ZERO(&efs);
 				FD_SET(c->info.s, &sfs);
 				FD_SET(c->info.s, &efs);
-				select(c->info.s + 1, 0, &sfs, &efs, 0);
+				if (select(c->info.s + 1, 0, &sfs, &efs, &tv) == 0) {
+					ulog_warn("client did not accept data for %d seconds, closing connection",
+							  (int) HTTP_SEND_TIMEOUT);
+					http_close(c);
+					return -1;
+				}
 				/* we don't even bother checking what triggered it, because
 				   both will cause send() to return one way or another */
 				continue;
 			}
-			/* FIXME: what about EINTR? */
+			if (n < 0 && errno == EINTR)
+				continue;
 			return -1;
 		}
 		i += n;
@@ -489,7 +509,10 @@ static void process_request(client_connection_t *c)
 									end_pool();
 									return;
 								}
-								send_response(c, fbuf, rd);
+								if (send_response(c, fbuf, rd)) { /* client is gone, no point in reading on */
+									c->attr |= CONNECTION_CLOSE;
+									break;
+								}
 								fsz -= rd;
 							}
 							free(fbuf);
