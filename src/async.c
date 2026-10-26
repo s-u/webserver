@@ -330,6 +330,12 @@ void async_queue_process(async_queue *q, double timeout) {
 	pthread_mutex_lock(&(q->mux));
 	if (tries++) { /* wait only if we checked already once */
 	    struct timespec ts;
+	    /* the queue may have been finished since the caller checked,
+	       in which case nobody would wake us up anymore */
+	    if (!q->active) {
+		pthread_mutex_unlock(&(q->mux));
+		return;
+	    }
 	    /* possibilities: gettimeofday, clock_gettime, timespec_get */
 #ifdef __APPLE__
 	    /* on macOS we need a run-time check since R binaires support 10.13 and up */
@@ -452,6 +458,8 @@ int async_queue_finish(async_queue *q) {
        thread spawning */
     pthread_mutex_lock(&(q->mux));
     q->active = 0;
+    /* wake up idle process threads so they can see it */
+    pthread_cond_broadcast(&(q->cond));
     pthread_mutex_unlock(&(q->mux));
 
     /* trigger poll */
