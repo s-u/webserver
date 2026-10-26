@@ -19,25 +19,10 @@
 #ifndef WIN32
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #endif
 
 #include <Rinternals.h>
-
-static async_queue *r_queue;
-
-void r_ext_setup(int flags) {
-    if (!r_queue) {
-	r_queue = async_queue_new();
-    }
-}
-
-void r_ext_end() {
-    if (r_queue) {
-	async_queue_finish(r_queue);
-	async_queue_free(r_queue);
-	r_queue = 0;
-    }
-}
 
 #define CMD_HTTP_REQ  1
 #define CMD_HTTP_RESP 2
@@ -53,7 +38,8 @@ struct rmsg {
 	struct rmsg_req {
 	    int32_t  path, query, fragment, content_type, headers, auth;
 	    int32_t  processing_flags;
-	    uint32_t res0, res1, res2, res3, res4, res5, res6;
+	    char     method[8];
+	    uint32_t res2, res3, res4, res5, res6;
 	} req;
 	struct rmsg_res {
 	    int32_t  code, headers, err, content_type, flags, payload_type;
@@ -94,6 +80,7 @@ static size_t build_request_hdr(http_request_t *r, struct rmsg *msg, char *buf, 
     MSG_INSERT(r->auth, msg->h.req.auth);
     msg->date = r->date;
     msg->h.req.processing_flags = r->processing_flags;
+    memcpy(msg->h.req.method, r->method, sizeof(msg->h.req.method));
     return (size_t) len;
 }
 
@@ -126,6 +113,8 @@ static void parse_request_hdr(http_request_t *r, struct rmsg *msg, char *buf) {
     r->date = msg->date;
     r->processing_flags = msg->h.req.processing_flags;
 #endif
+    memcpy(r->method, msg->h.req.method, sizeof(r->method));
+    r->method[sizeof(r->method) - 1] = 0;
 }
 
 static size_t build_response_hdr(http_result_t *r, struct rmsg *msg, char *buf, size_t buf_len) {
@@ -155,11 +144,15 @@ static void parse_response_hdr(http_result_t *r, struct rmsg *msg, char *buf, in
 	r->err = (msg->h.res.err >= 0) ? strdup(buf + msg->h.res.err) : 0;
 	if (r->payload)
 	    free(r->payload);
+	r->payload = 0;
 	if (msg->body_len) {
-	    r->payload = malloc(msg->body_len);
-	    if (r->payload)
+	    /* the extra byte guarantees termination, since file payloads
+	       carry a file name which is used as a string */
+	    r->payload = malloc(msg->body_len + 1);
+	    if (r->payload) {
 		memcpy(r->payload, buf + msg->hdr_len, msg->body_len);
-	    else {
+		r->payload[msg->body_len] = 0;
+	    } else {
 		ulog_error("r_ext.parse_response_hdr: cannot allocate memory for body (%lu bytes)",
 			   (unsigned long) msg->body_len);
 		r->code = 500;
@@ -223,9 +216,20 @@ static void r_conn_fin(client_connection_t *c) {
 	    kill(c->pid, SIGHUP);
 	    DBG(ulog_debug("r_ext: r_conn_fin - waiting for worker %p (pid=%d)",
 			   (void*) c, (int) c->pid));
-	    /* FIXME: in case ther eis a probelm we may not want to wait indefinitely
-	       see above for a possibly better apporach ...*/
-	    wp = waitpid(c->pid, &stat, 0);
+	    /* wait up to 100ms. NOTE: we must not use SIGALRM/sigwait for this,
+	       because the signal is process-wide and its default action would
+	       terminate R if any other thread had it unblocked. */
+	    int tries = 0;
+	    while ((wp = waitpid(c->pid, &stat, WNOHANG)) == 0 && tries++ < 100) {
+		struct timespec ts = { 0, 1000000 }; /* 1ms */
+		nanosleep(&ts, NULL);
+	    }
+	    if (wp <= 0) {
+		/* FIXME: in case there is a problem we may not want to wait indefinitely
+		   see above for a possibly better apporach ...*/
+		kill(c->pid, SIGKILL);
+		wp = waitpid(c->pid, &stat, 0);
+	    }
 	}
 	DBG(ulog_debug("r_ext: r_conn_fin - wait result for worker %p (pid=%d) = %d (stat=%d)",
 		       (void*) c, (int) c->pid, (int) wp, stat));
@@ -358,8 +362,14 @@ static void r_process(client_connection_t *c) {
 	       becasue we use our special references-to-one-big-buffer approach,
 	       so those may not be freed by the handler */
 	    int n = r_inline_handler(&req, &res, c->ri);
-	    if (n) {};
 	    DBG(ulog_debug("r_inline_handler returned %d", n));
+	    /* r_inline_handler clears RF_REFUSED and signals it via the return
+	       value, but the parent can only see the flag, so put it back */
+	    if (!n)
+		res.flags |= RF_REFUSED;
+	    /* file payloads are sent as the (NUL-terminated) file name */
+	    if (res.payload && (res.payload_type == PAYLOAD_FILE || res.payload_type == PAYLOAD_TEMPFILE))
+		res.payload_len = strlen(res.payload);
 	    size_t l = build_response_hdr(&res, &c->hdr, c->buf, c->alloc);
 	    if (l > c->alloc) {
 		free(c->buf);
@@ -420,7 +430,6 @@ static server_t *new_remote_server(int flags) {
 }
 
 int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t *res) {
-    server_t *srv = c->info.srv;
     size_t l = build_request_hdr(req, &c->hdr, c->buf, c->alloc);
     if (l > c->alloc) {
 	if (c->buf)
@@ -444,9 +453,9 @@ int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t
     c->hdr.res = 0;
     DBG(ulog_debug("r_ext.r_one_request: sending CMD_HTTP_REQ, hdr_len=%ld, body_len=%ld",
 	     (long) l, (long) req->body_len));
-    int n = srv->send(c, &c->hdr, sizeof(c->hdr));
-    DBG(ulog_debug("r_ext.r_one_request: send header = %d", n));
-    if (n < (int) sizeof(c->hdr)) {
+    ssize_t n = send_all(c, &c->hdr, sizeof(c->hdr), 0, 0);
+    DBG(ulog_debug("r_ext.r_one_request: send header = %d", (int) n));
+    if (n <= 0) {
 	ulog_warn("r_ext.r_one_request: failed to send request to worker %p (pid=%d)",
 		  (void*) c, (int) c->pid);
 	if (c->info.s != INVALID_SOCKET){
@@ -455,12 +464,10 @@ int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t
 	}
 	return -2;
     }
-    /* FIXME: are partial sends a thing on the socket pairs?
-       Also need to check/fix size types. */
     if (l) {
-	n = srv->send(c, c->buf, l);
-	DBG(ulog_debug("r_ext.r_one_request: send hdr_len = %d", n));
-	if (n < (int) l) {
+	n = send_all(c, c->buf, l, 0, 0);
+	DBG(ulog_debug("r_ext.r_one_request: send hdr_len = %d", (int) n));
+	if (n <= 0) {
 	    if (c->info.s != INVALID_SOCKET){
 		closesocket(c->info.s);
 		c->info.s = INVALID_SOCKET;
@@ -469,9 +476,9 @@ int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t
 	}
     }
     if (req->body_len) {
-	n = srv->send(c, req->body, req->body_len);
-	DBG(ulog_debug("r_ext.r_one_request: send body = %d", n));
-	if (n < req->body_len) {
+	n = send_all(c, req->body, req->body_len, 0, 0);
+	DBG(ulog_debug("r_ext.r_one_request: send body = %d", (int) n));
+	if (n <= 0) {
 	    if (c->info.s != INVALID_SOCKET){
 		closesocket(c->info.s);
 		c->info.s = INVALID_SOCKET;
@@ -552,9 +559,13 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
     if (!f) { /* child */
 	DBG(ulog_debug("r_new_worker: child process %d started", (int) getpid()));
 	closesocket(ios[0]);
+	/* the worker must not keep the listening socket or any client connection
+	   of the parent alive (the client would never see the connection close) */
+	close_server_sockets_in_child(ios[1]);
+	r_inline_fork_child();
 	c->info.s = ios[1];
 	c->info.srv = remote_server;
-	c->ri = ri;
+	c->ri = r_inline_worker_entry(ri);
 	/* in the child this should be the only connection as
 	   we process it synchronously */
 	work_conn = c;

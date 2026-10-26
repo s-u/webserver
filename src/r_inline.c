@@ -307,6 +307,39 @@ void r_inline_end() {
     }
 }
 
+/* Forked workers are created while holding the R queue lock so that no other
+   thread is in the middle of an R evaluation (which the child would otherwise
+   inherit as a frozen, inconsistent interpreter state). */
+void r_inline_fork_lock(void) {
+    if (r_queue)
+	async_queue_begin(r_queue);
+}
+
+void r_inline_fork_unlock(void) {
+    if (r_queue)
+	async_queue_end(r_queue);
+}
+
+/* called in the child right after fork() while the lock is held by the
+   (only remaining) thread: the child is single-threaded, so it needs no lock. */
+void r_inline_fork_child(void) {
+    if (r_queue) {
+	async_queue_end(r_queue);
+	r_queue = 0;
+    }
+}
+
+/* private copy of a handler for use in a forked worker, which must evaluate
+   in-process instead of delegating to yet another worker */
+r_inline *r_inline_worker_entry(r_inline *r) {
+    r_inline *c = (r_inline*) malloc(sizeof(r_inline));
+    if (!c)
+	return r;
+    *c = *r;
+    c->flags &= ~RIF_FORK;
+    return c;
+}
+
 void r_inline_thread_end() {
     if (worker) {
 	DBG(ulog_debug("r_inline_end: disposing of workers"));
@@ -357,10 +390,9 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 	    }
 	    if (!worker) {
 		DBG(ulog_debug("r_inline: RIF_FORK requested, starting new worker"));
-		r->flags ^= RIF_FORK;
-		/* the worker should not have the FORK flag */
+		r_inline_fork_lock();
 		worker = r_ext_new_worker(r);
-		r->flags |= RIF_FORK;
+		r_inline_fork_unlock();
 		if (!worker) {
 		    /* we delayed the destruction of the old worker for
 		       performance reasons, but now we have to do it */
@@ -381,7 +413,7 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 
 	if (opr == -1) { /* internal error in the handler */
 	    res->code = 500;
-	    ulog_error("r_ext worker memory allocation error");
+	    ulog_error("r_ext worker failed (memory allocation error or worker died)");
 	    return 1;
 	}
 
