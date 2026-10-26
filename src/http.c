@@ -652,7 +652,7 @@ static void http_input_iteration(client_connection_t *c) {
 				while (*s && *s != '\r' && *s != '\n') s++;
 				if (!*s) { /* incomplete line */
 					if (bol == c->line_buf) {
-						if (c->line_pos < LINE_BUF_SIZE) { /* one, incomplete line, but the buffer is not full yet, just return */
+						if (c->line_pos < LINE_BUF_SIZE - 1) { /* one, incomplete line, but the buffer is not full yet (one byte is reserved for the NUL), just return */
 							end_pool();
 							return;
 						}
