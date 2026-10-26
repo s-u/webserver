@@ -246,8 +246,11 @@ static int send_http_response(client_connection_t *c, const char *text) {
 }
 
 /* decode URI in place (decoding never expands) */
-static void uri_decode(char *s)
+/* returns non-zero if the input decodes to a NUL byte (which would silently
+   truncate the path) */
+static int uri_decode(char *s)
 {
+    int bad = 0;
     char *t = s;
     while (*s) {
 		if (*s == '%') { /* NOTE: '+' is literal in paths, only the query uses it for SPC */
@@ -261,10 +264,12 @@ static void uri_decode(char *s)
 			else if (*s >= 'a' && *s <= 'f') ec |= (unsigned char)(*s - 'a' + 10);
 			else if (*s >= 'A' && *s <= 'F') ec |= (unsigned char)(*s - 'A' + 10);
 			if (*s) s++;
+			if (!ec) bad = 1;
 			*(t++) = (char) ec;
 		} else *(t++) = *(s++);
     }
     *t = 0;
+    return bad;
 }
 
 /* finalize a request - essentially for HTTP/1.0 it means that
@@ -329,7 +334,12 @@ static void process_request(client_connection_t *c)
 		fragment = s;
 	}
 
-    uri_decode(c->url); /* decode the path part */
+    if (uri_decode(c->url)) { /* decode the path part */
+	send_http_response(c, " 400 Bad Request (invalid path encoding)\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+	c->attr |= CONNECTION_CLOSE;
+	end_pool();
+	return;
+    }
     {   /* construct "try(httpd(url, query, body, headers), silent=TRUE)" */
 		http_request_t req;
 		http_result_t res = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
