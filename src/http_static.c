@@ -100,14 +100,26 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
 
     if (!stat(http_tmp, &st)) { /* path exists */
 	DBG(ulog_debug(" - path exists, mode: 0x%x", st.st_mode));
-	if (st.st_mode & S_IFDIR) { /* if it is a directory, we only accept it if index exists */
+	if (S_ISDIR(st.st_mode)) { /* if it is a directory, we only accept it if index exists */
 	    if (hs->index) {
+		size_t dl = strlen(http_tmp);
+		int slash = (dl && http_tmp[dl - 1] == '/');
+		if (!slash)
+		    strcat(http_tmp, "/");
 		strcat(http_tmp, hs->index);
 		DBG(ulog_debug(" - trying '%s'\n", http_tmp));
-		if (!stat(http_tmp, &st))
+		if (!stat(http_tmp, &st)) {
 		    found = 1;
+		    if (!slash) { /* relative links in the index only work with a trailing slash, so redirect */
+			snprintf(http_tmp, sizeof(http_tmp), "Location: %s/\r\n", path);
+			res->headers = strdup(http_tmp);
+			res->code = 301;
+			end_pool();
+			return 1;
+		    }
+		}
 	    }
-	} else if (st.st_mode & S_IFREG) /* otherwise we only accept regular files */
+	} else if (S_ISREG(st.st_mode)) /* otherwise we only accept regular files */
 	    found = 1;
 	else DBG(ulog_debug(" - found, but neither file not directory -> 404"));
     }
