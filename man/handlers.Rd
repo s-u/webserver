@@ -1,17 +1,17 @@
 \name{handlers}
 \alias{handlers}
 \alias{addHandler}
-\alias{rmAllHanders}
+\alias{rmAllHandlers}
 \title{Webserver Content Handlers}
 \description{
   \code{addHandler} adds a content handler to be used with the
   webserver.
 
-  \code{rmAllHanders} removes all currently registered handlers.
+  \code{rmAllHandlers} removes all currently registered handlers.
 }
 \usage{
 addHandler(type, prefix, ...)
-rmAllHanders()
+rmAllHandlers()
 }
 \arguments{
 \item{type}{handler type}
@@ -24,7 +24,7 @@ guaranteed for the future).
 }
 \details{
 For each webserver request the content handlers are matched in sequence
-against the request's path and each matching handlers gets a chance to
+against the request's path and each matching handler gets a chance to
 provide the result for the request.
 
 Most commonly used handlers are \code{"static"} which serves files from
@@ -39,12 +39,14 @@ Syntax: \code{addHandler("static", prefix, path, index=NULL,
 When the \code{prefix} is matched, it is removed from the request path
 and the remaining path is appended to \code{path} to look up
 files. If the target matches a directory and \code{index} is a string,
-then \code{index} is appended to the path. If the resulting target is a
-file, it is served as the request result. Otherwise either 404 Not Found
-response is sent (if \code{stop=TRUE}) or the processing is passed to
-the next handler.
+then \code{index} is appended to the path, unless the trailing slash is
+missing in which case a re-direct is returned to add the slash (this
+makes sure that relative paths in the index stay valid).
+If the resulting target is a file, it is served as the request result.
+Otherwise either 404 Not Found response is sent (if \code{stop=TRUE})
+or the processing is passed to the next handler.
 
-The static handler supports condifional GET requests based on last
+The static handler supports conditional GET requests based on last
 modified timestamp. It also supports HTTP range requests. If
 \code{gzip=TRUE} and the client has requested gzip compression then the
 handler checks if a file \code{<target>.gz} exists and is not older than
@@ -58,7 +60,7 @@ Serves files from the current directory at the root of URLs. It will
 stop and not evaluate any furhter handlers even if the file is not
 found.
 }
-\section{R Function Hander}{
+\section{R Function Handler}{
   This handler calls an R function with the same API as the internal R
   server and Rserve.
 
@@ -86,8 +88,8 @@ found.
     \item{path}{string, path of the request}
     \item{query}{query string part of the request. If
       \code{parse.query=TRUE} (the default) then the query string is
-      parsed into a named character vector, so, e.g. the query string
-      \code{"a=1&b=foo"} will be parsed into R object
+      parsed into a named character vector, so, e.g., the query string
+      \code{"a=1&b=foo"} will be parsed into the R object
       \code{c(a="1", b="foo")}. Otherwise it is just the string itself.}
     \item{body}{body part of the request or \code{NULL} if there is no
       body. If \code{parse.body=TRUE} then an attempt is made to decode
@@ -109,15 +111,15 @@ found.
 
   \code{list(result, content.type, headers, http.code)}
 
-  Only the first component is mandatory, all others are optional.
+  Only the first list element is mandatory, all others are optional.
 
   \itemize{
     \item{result}{Can be either a string or a raw vector containing the
       body of the result to return to the client. As a special case, the
-      result can be a named list entry and have either \code{file} or
-      \code{tempfile} name in which case the result is interpreted as a
-      path to a file whose contents will be served. In the case of
-      \code{tempfile} the file will be removed once read.}
+      result can be a named character vector of length one with either
+      \code{file} or \code{tempfile} name in which case the result is
+      interpreted as a path to a file whose contents will be served.
+      In the case of \code{tempfile} the file will be removed once read.}
     \item{content.type}{string, MIME type of the result, defaults to
       \code{"text/html"}}
     \item{headers}{character vector (unnamed) of any additional headers
@@ -132,7 +134,7 @@ found.
   continue to the next handler. Note that due to the relatively
   expensive nature of some evaluation methods (such as worker
   communication) it is recommended to consolidate R handlers instead of
-  relying on each to signal its unwillingness to process the reqeust.
+  relying on each to signal its unwillingness to process the request.
 
   If the returned object has any other form (e.g. if it is a character
   vector), it is assumed to be an error and it will result in 500 HTTP
@@ -143,14 +145,13 @@ found.
       list(as.numeric(query["a"]) + as.numeric(query["b"])))}
 }
 \section{Rewrite Handler}{
-  This handler calls modifies the request based on simple substitution
-  rules.
+  This handler modifies the request based on simple substitution rules.
 
   \code{addHandler("rewrite", prefix, replacement, stop=FALSE)}
 
   The \code{prefix} can contain the \code{?} character as a wildcard
   which will match any number of characters other than \code{/}. The
-  matched content is the avaiable in the form of \code{$n} variables in
+  matched content is then avaiable in the form of \code{$n} variables in
   the \code{replacement} where \code{n} is one of the integers 1..9.
   If the request prefix is matched then it is replaced by the
   \code{replacement}.
