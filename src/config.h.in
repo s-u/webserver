@@ -1,9 +1,6 @@
 /* src/config.h.in.  Generated from configure.ac by autoheader.  */
 
-/* If defined TLS/SSL support is enabled. */
-#undef HAS_TLS
-
-/* Define to 1 if you have the `connect' function. */
+/* Define to 1 if you have the 'connect' function. */
 #undef HAVE_CONNECT
 
 /* Define to 1 if you have the <inttypes.h> header file. */
@@ -12,16 +9,16 @@
 /* IPv6 support present and enabled */
 #undef HAVE_IPV6
 
-/* Define to 1 if you have the `inet' library (-linet). */
+/* Define to 1 if you have the 'inet' library (-linet). */
 #undef HAVE_LIBINET
 
-/* Define to 1 if you have the `nsl' library (-lnsl). */
+/* Define to 1 if you have the 'nsl' library (-lnsl). */
 #undef HAVE_LIBNSL
 
-/* Define to 1 if you have the `nsl_s' library (-lnsl_s). */
+/* Define to 1 if you have the 'nsl_s' library (-lnsl_s). */
 #undef HAVE_LIBNSL_S
 
-/* Define to 1 if you have the `socket' library (-lsocket). */
+/* Define to 1 if you have the 'socket' library (-lsocket). */
 #undef HAVE_LIBSOCKET
 
 /* Define to 1 if you have the <limits.h> header file. */
@@ -72,6 +69,9 @@
 /* Define to 1 if you have the <sys/un.h> header file. */
 #undef HAVE_SYS_UN_H
 
+/* If defined TLS/SSL support is enabled. */
+#undef HAVE_TLS
+
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
 
@@ -100,7 +100,7 @@
    your system. */
 #undef PTHREAD_CREATE_JOINABLE
 
-/* Define to 1 if all of the C90 standard headers exist (not just the ones
+/* Define to 1 if all of the C89 standard headers exist (not just the ones
    required in a freestanding environment). This macro is provided for
    backward compatibility; new code need not use it. */
 #undef STDC_HEADERS
