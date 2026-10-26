@@ -206,8 +206,13 @@ void r_inline_process(http_request_t *req, http_result_t *res, SEXP sFun, int fl
     SEXP sHdr      = PROTECT((flags & RIF_PARSE_HEADERS) ? r_http_parse_headers(req->headers, -1) :
 			     buf2raw(req->headers, req->headers ? strlen(req->headers) : 0));
     SEXP sMethod   = PROTECT(mkString(req->method));
-    if (req->content_type)
-	Rf_setAttrib(sBody, sCTS, mkString(req->content_type));
+    /* the body is NULL if empty and attributes cannot be set on NULL
+       (the resulting R error would longjmp outside of any toplevel context) */
+    if (req->content_type && sBody != R_NilValue) {
+	SEXP sCT = PROTECT(mkString(req->content_type));
+	Rf_setAttrib(sBody, sCTS, sCT);
+	UNPROTECT(1);
+    }
     /* fragments are not sent even though they are allowed, so for now let's ignore them
        SEXP sFragment = PROTECT(req->fragment ? mkString(req->fragment) : R_NilValue); */
     SEXP what      = PROTECT(LCONS(sFun, list5(sPath, sQuery, sBody, sHdr, sMethod))), x;
