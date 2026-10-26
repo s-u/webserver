@@ -650,7 +650,8 @@ static void http_input_iteration(client_connection_t *c) {
 			{
 				char *bol = s;
 				while (*s && *s != '\r' && *s != '\n') s++;
-				if (!*s) { /* incomplete line */
+				/* a trailing CR may be the first half of CRLF: wait for more data */
+				if (!*s || (*s == '\r' && !s[1])) { /* incomplete line */
 					if (bol == c->line_buf) {
 						if (c->line_pos < LINE_BUF_SIZE - 1) { /* one, incomplete line, but the buffer is not full yet (one byte is reserved for the NUL), just return */
 							end_pool();
