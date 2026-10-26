@@ -171,6 +171,8 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
 	if (range && !strncmp(range, "bytes", 5)) { /* we only support byte ranges */
 	    const char *v = range + 5;
 	    while (*v == ' ' || *v == '\t') v++;
+	    if (*v == '=') v++; else v = "";
+	    while (*v == ' ' || *v == '\t') v++;
 	    /* we only support a single range that has a start */
 	    if (*v >= '0' && *v <= '9') {
 		size_t start = 0, end = st.st_size;
