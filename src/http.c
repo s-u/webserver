@@ -39,6 +39,7 @@
 #define WS_UPGRADE        0x0100 /* upgrade to WebSockets protocol */
 #define BAD_LENGTH        0x0200 /* conflicting or malformed Content-Length: */
 #define TRANSFER_ENCODING 0x0400 /* Transfer-Encoding: was specified (unsupported) */
+#define EXPECT_CONTINUE   0x0800 /* Expect: 100-continue was specified */
 
 /* used by http_send_respose to limit the size sent at once. Must be at most 31-bit */
 #define MAX_SEND_LEN (1024*1024)
@@ -655,6 +656,10 @@ static void http_input_iteration_(client_connection_t *c) {
 					return;
 				}
 
+				/* the client waits for our go-ahead before sending the body */
+				if ((c->attr & EXPECT_CONTINUE) && IS_HTTP_1_1(c) && c->line_pos < c->content_length)
+					send_http_response(c, " 100 Continue\r\n\r\n");
+
 				/* copy body content (as far as available) */
 				c->body_pos = (c->content_length < c->line_pos) ? c->content_length : c->line_pos;
 				if (c->body_pos) {
@@ -811,6 +816,12 @@ static void http_input_iteration_(client_connection_t *c) {
 								c->content_type = strdup(k);
 								if (!strncmp(k, "application/x-www-form-urlencoded", 33))
 									c->attr |= CONTENT_FORM_UENC;
+							}
+							if (!strcmp(bol, "expect")) {
+								char *l = k;
+								while (*l) { if (*l >= 'A' && *l <= 'Z') *l |= 0x20; l++; }
+								if (!strncmp(k, "100-continue", 12))
+									c->attr |= EXPECT_CONTINUE;
 							}
 							if (!strcmp(bol, "transfer-encoding"))
 								c->attr |= TRANSFER_ENCODING;
