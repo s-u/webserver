@@ -443,7 +443,7 @@ static void process_request(client_connection_t *c)
 					if (!f) {
 						/* FIXME: we just pretend that 0-length is ok, but it's not! */
 						ulog_warn("attempt to serve '%s', but it cannot be opened", fn);
-						send_response(c, "Content-Length: 0\r\n\r\n", 23);
+						send_response(c, "Content-Length: 0\r\n\r\n", 21);
 						http_free_result(&res);
 						fin_request(c);
 						end_pool();
