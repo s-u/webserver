@@ -314,7 +314,7 @@ void http_free_result(http_result_t* res) {
 
 static void web_log(http_request_t *req, http_result_t *res) {
 	char wlbuf[256];
-	const char *c = req->headers ? strstr(req->headers, "X-Real-IP:") : "";
+	const char *c = req->headers ? strstr(req->headers, "X-Real-IP:") : 0;
 	if (c) {
 		const char *d;
 		c += 10;
