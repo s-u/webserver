@@ -250,9 +250,7 @@ static void uri_decode(char *s)
 {
     char *t = s;
     while (*s) {
-		if (*s == '+') { /* + -> SPC */
-			*(t++) = ' '; s++;
-		} else if (*s == '%') {
+		if (*s == '%') { /* NOTE: '+' is literal in paths, only the query uses it for SPC */
 			unsigned char ec = 0;
 			s++;
 			if (*s >= '0' && *s <= '9') ec |= ((unsigned char)(*s - '0')) << 4;
