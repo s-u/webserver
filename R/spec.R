@@ -65,8 +65,7 @@ env2spec <- function(e, names, rho=parent.frame()) {
                     arg <- f[[n]]
                     sym <- if (is.symbol(arg)) arg else arg[[1]]
                     if (identical(sym, quote(required)) ||
-                        (opt <- TRUE) ||
-                        identical(sym, quote(optional))) {
+                        (identical(sym, quote(optional)) && (opt <- TRUE))) {
                         ## have type spec?
                         if (length(arg) > (1 + opt)) {
                             ty <- eval(arg[[2 + opt]], rho)
