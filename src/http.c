@@ -885,14 +885,20 @@ static void http_input_iteration_(client_connection_t *c) {
 			c->body_pos += n;
 		}
 		if (c->body_pos == c->content_length) { /* yay! we got the whole body */
+			/* the line buffer can only hold more data if the whole body was in it,
+			   i.e., the body is at its beginning and the rest is the next request */
+			size_t consumed = c->content_length;
 			process_request(c);
-			if (c->attr & CONNECTION_CLOSE || c->line_pos) { /* we have to close the connection if there was a double-hit */
+			if (c->attr & CONNECTION_CLOSE) {
 				http_close(c);
 				end_pool();
 				return;
 			}
 			/* keep-alive - reset the worker so it can process a new request */
+			if (c->line_pos)
+				memmove(c->line_buf, c->line_buf + consumed, c->line_pos);
 			conn_request_done(c);
+			c->pipelined = (c->line_pos > 0);
 			end_pool();
 			return;
 		}
