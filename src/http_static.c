@@ -88,8 +88,11 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
     fn = path + hs->prefix_len;
     if (strlen(fn) + strlen(hs->path) +
 	(hs->index ? strlen(hs->index) : 0) + 7 > sizeof(http_tmp)) {
+	/* NOT res->err, which would turn this into a 500 response */
 	res->code = 414;
-	res->err = strdup("Path too long.");
+	res->payload = strdup("Path too long.");
+	res->payload_len = res->payload ? strlen(res->payload) : 0;
+	res->content_type = strdup("text/plain");
 	end_pool();
 	return 1;
     }
