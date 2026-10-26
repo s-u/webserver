@@ -567,6 +567,9 @@ void serverLoop(void) {
     } /* end while(active) */
 
 	restore_SIGPIPE();
+	/* give SIGINT/SIGTERM/SIGHUP back to R, otherwise Ctrl-C would keep
+	   just clearing our `active' flag after the server has stopped */
+	restore_signal_handlers();
 	end_pool();
 }
 
