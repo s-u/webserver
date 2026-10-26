@@ -38,6 +38,7 @@
 #define CONTENT_FORM_UENC 0x0080 /* message content type is application/x-www-form-urlencoded */
 #define WS_UPGRADE        0x0100 /* upgrade to WebSockets protocol */
 #define BAD_LENGTH        0x0200 /* conflicting or malformed Content-Length: */
+#define TRANSFER_ENCODING 0x0400 /* Transfer-Encoding: was specified (unsupported) */
 
 /* used by http_send_respose to limit the size sent at once. Must be at most 31-bit */
 #define MAX_SEND_LEN (1024*1024)
@@ -596,6 +597,12 @@ static void http_input_iteration(client_connection_t *c) {
 					end_pool();
 					return;
 				}
+				if (c->attr & TRANSFER_ENCODING) { /* we cannot decode chunked bodies, so do not misread them as new requests */
+					send_http_response(c, " 501 Not Implemented (Transfer-Encoding)\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+					http_close(c);
+					end_pool();
+					return;
+				}
 				if (c->attr & BAD_LENGTH) {
 					send_http_response(c, " 400 Bad Request (invalid Content-Length)\r\nConnection: close\r\n\r\n");
 					http_close(c);
@@ -803,6 +810,8 @@ static void http_input_iteration(client_connection_t *c) {
 								if (!strncmp(k, "application/x-www-form-urlencoded", 33))
 									c->attr |= CONTENT_FORM_UENC;
 							}
+							if (!strcmp(bol, "transfer-encoding"))
+								c->attr |= TRANSFER_ENCODING;
 							if (!strcmp(bol, "host"))
 								c->attr |= HOST_HEADER;
 							if (!strcmp(bol, "authorization")) {
