@@ -158,7 +158,7 @@ static char *R_headers2cstr(SEXP sHeaders) {
     int i = 0, n = LENGTH(sHeaders);
     while (i < n) {
 	const char *c = CHAR(STRING_ELT(sHeaders, i++));
-	if (*c && *c != '\r' && *c == '\n') /* empty headers are illegal */
+	if (*c && *c != '\r' && *c != '\n') /* empty headers are illegal */
 	    len += strlen(c) + 2;
     }
     if (!len)
@@ -171,7 +171,7 @@ static char *R_headers2cstr(SEXP sHeaders) {
     i = 0;
     while (i < n) {
 	const char *c = CHAR(STRING_ELT(sHeaders, i++));
-	if (*c && *c != '\r' && *c == '\n') {
+	if (*c && *c != '\r' && *c != '\n') {
 	    size_t l = strlen(c);
 	    memcpy(dst, c, l);
 	    dst += l;
