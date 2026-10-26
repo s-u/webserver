@@ -42,18 +42,18 @@
 ## .pass - character vector with named of low-level args to pass
 ## .fn   - the user function to call with all args resolved
 
-env2spec <- function(e, names, rho=parent.frame()) {
+env2spec <- function(env, names, rho=parent.frame()) {
     if (missing(names)) {
-        if (is.environment(e))
-            names <- ls(e)
-        else if (is.list(e))
-            names <- base::names(e)
+        if (is.environment(env))
+            names <- ls(env)
+        else if (is.list(env))
+            names <- base::names(env)
         else
             stop("Not a list nor environment")
     }
     s <- new.env(TRUE, emptyenv())
     for (n in names) {
-        fn <- e[[n]]
+        fn <- env[[n]]
         if (is.function(fn)) {
             f <- formals(fn)
             nd <- grep("^[.]", names(f), invert=TRUE)
@@ -103,12 +103,22 @@ env2spec <- function(e, names, rho=parent.frame()) {
             ## l <- add.pairlist(l, key, val) and do.call without list conversion
             ## since l[key] <- list(val) is inefficient
             ff <- function(.path, .query, .body, .headers, ...) {
+                .qa <- if(length(.query)) as.list(.query) else list()
+                r <- tryCatch({
+                    if (length(.body)) {
+                        ct <- attr(.body, "content-type")
+                        if (length(ct) && isTRUE(grepl("/json$", tolower(ct)))) {
+                            j <- jsonlite::fromJSON(rawToChar(.body), simplifyDataFrame=FALSE, simplifyMatrix=FALSE)
+                            for (n in names(j))
+                                .qa[[n]] <- j[[n]]
+                        }
+                    }
                 .l <- list()
                 if (length(.args)) {
-                    .qn <- names(.query)
+                    .qn <- names(.qa)
                     for (.a in names(.args)) {
                         if (.a %in% .qn)
-                            .l[.a] <- list(.args[[.a]]$convert(.query[.a]))
+                            .l[.a] <- list(.args[[.a]]$convert(.qa[[.a]]))
                         else if (.args[[.a]]$required)
                             stop("Required parameter `", .a, "' is missing")
                         else
@@ -118,6 +128,25 @@ env2spec <- function(e, names, rho=parent.frame()) {
                 for (.a in .pass)
                     .l[.a] <- list(get(.a))
                 do.call(.fn, .l)
+                }, error=function(e) {
+                    e$error_class=class(e)
+                    e$success=FALSE
+                    e$call=as.character(e$call)
+                    unclass(e)
+                })
+                ## the result must be a response for the rfun handler; note that a
+                ## character vector on its own would be reported as an error
+                if (inherits(r, "WebPlot")) {
+                    p <- FastRWeb::as.WebResult(r)
+                    list(tmpfile=p[2], p[3])
+                } else if (inherits(r, "AsIs")) ## low-level response, passed as-is
+                    unclass(r)
+                else if (inherits(r, "json"))
+                    list(paste(r, collapse="\n"), "application/json")
+                else if (is.character(r))
+                    list(paste(r, collapse="\n"), "text/plain")
+                else
+                    list(as.character(jsonlite::toJSON(r, auto_unbox=TRUE)), "application/json")
             }
             environment(ff) <- e
             s[[n]] <- compiler::cmpfun(ff)
@@ -125,3 +154,18 @@ env2spec <- function(e, names, rho=parent.frame()) {
     }
     s
 }
+
+spec <- function(def) {
+  if (!requireNamespace("jsonlite", quietly=TRUE))
+    stop("spec() requires the jsonlite package")
+  .api <- env2spec(def)
+  function(path, ...) {
+    if (is.function(f <- .api[[gsub("^/+","",path)]]))
+	  f(path, ...)
+    else list('{"message":"path not found", "success":false}', "application/json", character(), 404L)
+  }
+}
+
+## those are variables in the spec environment, we have to
+## declare them for check to not complain
+utils::globalVariables(c(".args", ".fn", ".pass"))
