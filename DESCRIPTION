@@ -1,7 +1,7 @@
 Package: webserver
 Version: 1.0-0
-Title: Web/HTTP server for R
-Author: Simon Urbanek <Simon.Urbanek@r-project.org>
+Title: Web/HTTP Server for R
+Authors@R: person("Simon", "Urbanek", role=c("aut","cre","cph"), email="Simon.Urbanek@r-project.org", comment=c("https://urbanek.nz", ORCID="0000-0003-2297-1732"))
 Maintainer: Simon Urbanek <Simon.Urbanek@r-project.org>
 Description: Provides a highly performant and flexible webserver for R.
   Supports HTTP and TLS/SSL.
