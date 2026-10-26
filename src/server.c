@@ -123,6 +123,73 @@ int client_set_blocking(client_connection_t *conn, int block) {
 	return set_blocking(conn->info.s, block);
 }
 
+#define CR_ERR  4
+#define CR_SEND 2
+#define CR_RECV 1
+
+/* return -1 on error, 0 on timeout and mask of what if ready */
+int client_ready(client_connection_t *c, int what, double timeout) {
+	fd_set sfs, rfs, efs;
+    struct timeval tv;
+	int n, fd = c->info.s;
+	if (what & CR_RECV) {
+		FD_ZERO(&rfs);
+		FD_SET(fd, &rfs);
+	}
+	if (what & CR_SEND) {
+		FD_ZERO(&sfs);
+		FD_SET(fd, &sfs);
+	}
+	if (what & CR_ERR) {
+		FD_ZERO(&efs);
+		FD_SET(fd, &efs);
+	}
+	tv.tv_sec  = (int) timeout;
+	tv.tv_usec = (int) ((timeout - tv.tv_sec) * 1000000.0);
+	n = select(fd + 1,
+			   (what & CR_RECV) ? &rfs : 0,
+			   (what & CR_SEND) ? &sfs : 0,
+			   (what & CR_ERR)  ? &efs : 0,
+			   (timeout < 0) ? 0 : &tv);
+	if (n == 1)
+		return (((what & CR_RECV) && FD_ISSET(fd, &rfs)) ? CR_RECV : 0) |
+			(((what & CR_SEND) && FD_ISSET(fd, &sfs)) ? CR_SEND : 0) |
+			(((what & CR_ERR) && FD_ISSET(fd, &efs)) ? CR_ERR : 0);
+	return n;
+}
+/* -1 = send error, -2 = timeout, -3 = on_intr signalled, -4 = clonnection closed */
+ssize_t send_all(client_connection_t *c, const void *buf, size_t len, double timeout,
+				 int (*on_intr)(client_connection_t *c)) {
+    ssize_t total = len;
+    if (!buf || !len || !c || !c->info.srv)
+		return 0;
+    server_t *srv = c->info.srv;
+    while (len) {
+		ssize_t n = srv->send(c, buf, len);
+		if (n == 0)
+			return -4; /* since we cannot resume, we don't care about size sent */
+		if (n < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				DBG(ulog_debug("sever.send_all: EAGAIN on %p (%d)", (void*) c, c->info.s));
+				int w = client_ready(c, CR_SEND | CR_ERR, timeout);
+				if (!w) /* timeout */
+					return -2;
+				/* aything else we let send() handle */
+				continue;
+			}
+			if (errno == EINTR) {
+				if (on_intr && on_intr(c))
+					return -3;
+				continue;
+			}
+			return -1;
+		}
+		len -= n;
+		buf = (const char*) buf + n;
+    }
+    return total;
+}
+
 int server_get_info(server_t *srv, client_connection_info_t *info) {
 	socklen_t len = sizeof(struct sockaddr_in);
 	if (!info || !srv)
@@ -344,6 +411,51 @@ int rm_server(server_t *srv) {
 
 	return 1;
 }
+
+#ifndef WIN32
+/* Closes (in a forked worker) every socket that belongs to one of our servers
+   except `keep`: the listening sockets and the accepted client connections,
+   which share the local address of the listening socket. Otherwise the worker
+   would keep client connections open after the parent has closed them and
+   keep the port bound after the server has stopped. Other descriptors (e.g.
+   database connections of the R session) are left alone. */
+void close_server_sockets_in_child(int keep) {
+	long maxfd = sysconf(_SC_OPEN_MAX);
+	int fd, i;
+	if (maxfd < 0 || maxfd > 65536) maxfd = 65536;
+	for (fd = 3; fd < maxfd; fd++) {
+		struct sockaddr_storage la;
+		socklen_t ll = sizeof(la);
+		if (fd == keep || getsockname(fd, (struct sockaddr*) &la, &ll))
+			continue; /* not an open socket */
+		for (i = 0; i < servers; i++) {
+			struct sockaddr_storage sa;
+			socklen_t sl = sizeof(sa);
+			int match = 0;
+			if (!server[i] || server[i]->ss == -1 || getsockname(server[i]->ss, (struct sockaddr*) &sa, &sl))
+				continue;
+			if (la.ss_family != sa.ss_family)
+				continue;
+			if (la.ss_family == AF_INET)
+				match = ((struct sockaddr_in*) &la)->sin_port == ((struct sockaddr_in*) &sa)->sin_port;
+#ifdef AF_INET6
+			else if (la.ss_family == AF_INET6)
+				match = ((struct sockaddr_in6*) &la)->sin6_port == ((struct sockaddr_in6*) &sa)->sin6_port;
+#endif
+			else if (la.ss_family == AF_UNIX) {
+				const char *lp = ((struct sockaddr_un*) &la)->sun_path, *sp = ((struct sockaddr_un*) &sa)->sun_path;
+				match = *lp && *sp && !strcmp(lp, sp);
+			}
+			if (match) {
+				close(fd);
+				break;
+			}
+		}
+	}
+}
+#else
+void close_server_sockets_in_child(int keep) {}
+#endif
 
 static int is_child = 0;
 

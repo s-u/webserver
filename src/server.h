@@ -145,6 +145,9 @@ ssize_t server_send(client_connection_t *conn, const void *buf, size_t len);
 void stop_server_loop(void);
 void serverLoop(void);
 
+ssize_t send_all(client_connection_t *c, const void *buf, size_t len, double timeout,
+				 int (*on_intr)(client_connection_t *c));
+
 /* helper function that prepares the process just like Rserve
    internal impleemntation - forking when desired, establishing
    pipes, setting see, uid/gid, cwd etc.
@@ -161,6 +164,7 @@ int client_set_blocking(client_connection_t *conn, int block);
 
 /* this one is called by the former to close all server sockets in the child */
 void close_all_srv_sockets(void);
+void close_server_sockets_in_child(int keep);
 
 #endif
 
