@@ -188,6 +188,14 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
 		    }
 		    if (end > st.st_size)
 			end = st.st_size;
+		    if (start >= st.st_size) { /* not satisfiable */
+			snprintf(http_tmp, sizeof(http_tmp),
+				 "Content-Range: bytes */%ld\r\n", (long) st.st_size);
+			res->headers = strdup(http_tmp);
+			res->code = 416;
+			end_pool();
+			return 1;
+		    }
 		    /* only valid case */
 		    if (start < end) {
 			res->flags |= RF_USE_RANGE;
