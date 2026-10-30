@@ -58,6 +58,20 @@ static int initSock() {
 static int active_srv_sockets[MAX_SRVS];
 
 static int active = 1;
+#ifdef WIN32
+#include <Rinternals.h>
+
+static void check_interrupt(void *data) {
+	R_CheckUserInterrupt();
+}
+
+/* no signals on Windows: poll R for a pending user interrupt (Ctrl-C/Esc).
+   R_CheckUserInterrupt() jumps out when interrupted, so catch that to be
+   able to shut down cleanly. Must be called on the main thread. */
+static int interrupt_pending(void) {
+	return !R_ToplevelExec(check_interrupt, 0);
+}
+#endif
 
 static void add_active_srv_socket(int s) {
 	int i = 0;
@@ -110,7 +124,7 @@ static void accepted_server(client_connection_t *conn) {
 	/* if keep-alive is enabled and supported - try to set it */
 	if (conn->info.srv->flags & SRV_KEEPALIVE) {
 		int ka = 1;
-		setsockopt(conn->info.s, SOL_SOCKET, SO_KEEPALIVE, &ka, sizeof(ka));
+		setsockopt(conn->info.s, SOL_SOCKET, SO_KEEPALIVE, (const char*) &ka, sizeof(ka));
 	}
 #endif
 	if (conn->info.srv->flags & SRV_NONBLOCK)
@@ -169,7 +183,7 @@ ssize_t send_all(client_connection_t *c, const void *buf, size_t len, double tim
 		if (n == 0)
 			return -4; /* since we cannot resume, we don't care about size sent */
 		if (n < 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			if (sockerrno == EAGAIN || sockerrno == EWOULDBLOCK) {
 				DBG(ulog_debug("sever.send_all: EAGAIN on %p (%d)", (void*) c, c->info.s));
 				int w = client_ready(c, CR_SEND | CR_ERR, timeout);
 				if (!w) /* timeout */
@@ -177,7 +191,7 @@ ssize_t send_all(client_connection_t *c, const void *buf, size_t len, double tim
 				/* aything else we let send() handle */
 				continue;
 			}
-			if (errno == EINTR) {
+			if (sockerrno == EINTR) {
 				if (on_intr && on_intr(c))
 					return -3;
 				continue;
@@ -596,6 +610,12 @@ void serverLoop(void) {
 	block_SIGPIPE();
 
     while(active && servers) { /* main serving loop */
+#ifdef WIN32
+	if (interrupt_pending()) {
+		ulog_info("serverLoop: interrupted");
+		break;
+	}
+#endif
 		int i;
 		int maxfd = 0;
 #ifndef WIN32

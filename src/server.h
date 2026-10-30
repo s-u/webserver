@@ -54,6 +54,16 @@
 #define inet_aton(A,B) (0, B.s_addr=inet_addr(A))
 
 #define sockerrno WSAGetLastError()
+
+/* Winsock reports errors via WSAGetLastError() with its own codes, so
+   the errno constants used to classify socket errors must map to those */
+#include <errno.h>
+#undef EWOULDBLOCK
+#undef EAGAIN
+#undef EINTR
+#define EWOULDBLOCK WSAEWOULDBLOCK
+#define EAGAIN WSAEWOULDBLOCK
+#define EINTR WSAEINTR
 #endif
 
 #define SA struct sockaddr
@@ -144,6 +154,7 @@ ssize_t server_send(client_connection_t *conn, const void *buf, size_t len);
 
 void stop_server_loop(void);
 void serverLoop(void);
+
 
 ssize_t send_all(client_connection_t *c, const void *buf, size_t len, double timeout,
 				 int (*on_intr)(client_connection_t *c));

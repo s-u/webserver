@@ -226,7 +226,7 @@ static int send_response(client_connection_t *c, const char *buf, size_t len)
 			/* FIXME: we're not setup well for blocking sends - we could to this
 			   asynchronously by managing the buffer to send, but for now
 			   we are fully synchronous even on non-blocking connections */
-			if (n < 0 && (errno == EWOULDBLOCK || errno == EAGAIN)) {
+			if (n < 0 && (sockerrno == EWOULDBLOCK || sockerrno == EAGAIN)) {
 				fd_set sfs, efs;
 				struct timeval tv = { HTTP_SEND_TIMEOUT, 0 };
 				FD_ZERO(&sfs);
@@ -243,7 +243,7 @@ static int send_response(client_connection_t *c, const char *buf, size_t len)
 				   both will cause send() to return one way or another */
 				continue;
 			}
-			if (n < 0 && errno == EINTR)
+			if (n < 0 && sockerrno == EINTR)
 				continue;
 			return -1;
 		}
@@ -592,10 +592,10 @@ static void http_input_iteration_(client_connection_t *c) {
 		int replay = c->pipelined;
 		c->pipelined = 0;
 		n = replay ? 0 : srv->recv(c, c->line_buf + c->line_pos, LINE_BUF_SIZE - c->line_pos - 1);
-		DBG(ulog_debug("[recv n=%d, line_pos=%d, part=%d, errno=%d]", n, c->line_pos, (int)c->part, (n < 0) ? errno : 0));
+		DBG(ulog_debug("[recv n=%d, line_pos=%d, part=%d, sockerrno=%d]", n, c->line_pos, (int)c->part, (n < 0) ? sockerrno : 0));
 		if (n < 0) { /* error, scrap this worker */
 			/* some cases are benign */
-			if (errno != EWOULDBLOCK && errno != EAGAIN && errno != EINTR)
+			if (sockerrno != EWOULDBLOCK && sockerrno != EAGAIN && sockerrno != EINTR)
 				http_close(c);
 			end_pool();
 			return;
@@ -900,12 +900,12 @@ static void http_input_iteration_(client_connection_t *c) {
 		if (c->body_pos < c->content_length) { /* need to receive more ? */
 			DBG(ulog_debug("BODY: body_pos=%d, content_length=%ld", c->body_pos, c->content_length));
 			n = srv->recv(c, c->body + c->body_pos, c->content_length - c->body_pos);
-			DBG(ulog_debug("      [recv n=%d - had %u of %lu; errno=%d]",
-						   n, (unsigned)c->body_pos, (unsigned long) c->content_length, (n < 0) ? errno : 0));
+			DBG(ulog_debug("      [recv n=%d - had %u of %lu; sockerrno=%d]",
+						   n, (unsigned)c->body_pos, (unsigned long) c->content_length, (n < 0) ? sockerrno : 0));
 			c->line_pos = 0;
 			if (n < 0) { /* error, scrap this worker */
 				/* some cases are benign */
-				if (errno != EWOULDBLOCK && errno != EAGAIN && errno != EINTR)
+				if (sockerrno != EWOULDBLOCK && sockerrno != EAGAIN && sockerrno != EINTR)
 					http_close(c);
 				end_pool();
 				return;
