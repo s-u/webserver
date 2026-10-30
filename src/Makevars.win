@@ -1,2 +1,2 @@
-PKG_CPPFLAGS=-Iwin32  
+PKG_CPPFLAGS=-Iwin32 -DWIN32
 PKG_LIBS=-lssl -lcrypto -lws2_32 -lcrypt32 -lz
