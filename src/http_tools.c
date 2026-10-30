@@ -59,6 +59,18 @@ const char *get_header(http_request_t *req, const char *name) {
 void sanitize_path(char *path) {
     char *src = path, *dst = path;
     int pos = 0;
+#ifdef WIN32
+    /* Windows accepts \ as a separator and : introduces drives and
+       NTFS streams, so neither may reach the file system as is */
+    for (; *src; src++) {
+        if (*src == '\\')
+            *src = '/';
+        if (*src != ':')
+            *(dst++) = *src;
+    }
+    *dst = 0;
+    src = dst = path;
+#endif
     while (*src) {
         if (!pos) {
             if (src[0] == '.') {
@@ -83,8 +95,11 @@ void sanitize_path(char *path) {
             continue;
         }
         pos++;
-        if (*src >= 32)
-            *(dst++) = *(src++);
+        /* char may be signed, bytes >= 0x80 (UTF-8) are retained;
+           control characters are dropped, but must be skipped */
+        if ((unsigned char) *src >= 32)
+            *(dst++) = *src;
+        src++;
     }
     *dst = 0;
 }
