@@ -14,6 +14,7 @@
 #include "r_http_tools.h"
 
 #include <string.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <time.h>
 #ifndef WIN32
