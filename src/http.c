@@ -314,6 +314,24 @@ static int uri_decode(char *s)
     return bad;
 }
 
+/* returns non-zero if the comma-separated list (e.g., the value of
+   Connection:) contains the token. Both are assumed to be lowercase. */
+static int has_token(const char *list, const char *token) {
+	size_t tl = strlen(token);
+	while (*list) {
+		const char *e, *t;
+		while (*list == ' ' || *list == '\t' || *list == ',') list++;
+		e = list;
+		while (*e && *e != ',') e++;
+		t = e;
+		while (t > list && (t[-1] == ' ' || t[-1] == '\t')) t--;
+		if ((size_t) (t - list) == tl && !memcmp(list, token, tl))
+			return 1;
+		list = e;
+	}
+	return 0;
+}
+
 /* finalize a request - essentially for HTTP/1.0 it means that
  * we have to close the connection */
 static void fin_request(client_connection_t *c) {
@@ -1109,7 +1127,7 @@ static void http_input_iteration_(client_connection_t *c) {
 							if (!strcmp(bol, "connection")) {
 								char *l = k;
 								while (*l) { if (*l >= 'A' && *l <= 'Z') *l |= 0x20; l++; }
-								if (!strncmp(k, "close", 5))
+								if (has_token(k, "close"))
 									c->attr |= CONNECTION_CLOSE;
 							}
 							if (!strcmp(bol, "sec-websocket-key")) {

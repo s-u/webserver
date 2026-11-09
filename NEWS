@@ -29,3 +29,6 @@
 
    o	reject requests with more than one Host: header with 400
 	(RFC 9112, 3.2).
+
+   o	Connection: is parsed as a list of tokens, so e.g.
+	"Connection: keep-alive, close" closes the connection.
