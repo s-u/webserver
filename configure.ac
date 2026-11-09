@@ -108,7 +108,7 @@ if test "x${want_tls}" != xno; then
    if test "x${OPENSSL_INCLUDES}" != x; then
       CPPFLAGS="${CPPFLAGS} -I${OPENSSL_INCLUDES}"
    else
-      if test x"${PKG_CPPFLAGS}" = x -a x"${PKG_LIBS}" = x -a x"$PKGCONFIG" != x; then
+      if test x"${PKG_CPPFLAGS}" = x && test x"${PKG_LIBS}" = x && test x"$PKGCONFIG" != x; then
          AC_MSG_CHECKING([for $PKGCONFIG])
 	 if $PKGCONFIG --version >/dev/null 2>&1; then
             AC_MSG_RESULT(yes)
