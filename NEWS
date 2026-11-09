@@ -3,3 +3,8 @@
 	system RNG (the code was never active). They inherit the R RNG
 	state of the parent, see ?webstart for how to get independent
 	random streams.
+
+   o	forked children now exit with _exit() and stdio is flushed
+	before fork(). Previously a child could emit output buffered
+	by the parent again or, when run by Rscript, make the parent
+	continue reading its script from the wrong position.

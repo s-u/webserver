@@ -339,8 +339,11 @@ static void process_request(client_connection_t *c)
 	if ((c->attr & WS_UPGRADE) && (c->srv->flags & HTTP_WS_UPGRADE)) {
 		WS13_upgrade(c, c->ws_key, c->ws_protocol, c->ws_version, c->aux->ws_connected);
 		/* the WS swtich messes up args since it replaces it with its own version so
-		   we can't go back to serving - just bail out (NOTE: only works when forked!) */
-		exit(0);
+		   we can't go back to serving - just bail out (NOTE: only works when forked!)
+		   _exit(): don't run the parent's atexit handlers or stdio clean-up,
+		   but flush our own output */
+		fflush(NULL);
+		_exit(0);
 	}
 #endif
 

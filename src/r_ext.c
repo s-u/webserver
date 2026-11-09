@@ -549,6 +549,9 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
 	free(c);
 	return 0;
     }
+    /* flush stdio so the child does not inherit (and later re-emit)
+       buffered output of the parent */
+    fflush(NULL);
     f = fork();
     if (f < 0) {
 	ulog_error("r_new_worker: fork() failed with %s when creating a new worker process",
@@ -591,7 +594,10 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
 	/* NOT exit(): that would run atexit handlers and stdio clean-up of the
 	   parent's state. In particular, it re-positions inherited input streams,
 	   which share the file offset with the parent, so e.g. Rscript would
-	   continue reading its script from the wrong place. */
+	   continue reading its script from the wrong place.
+	   Output buffered by the child itself is flushed explicitly (nothing
+	   is inherited since we flush before fork()). */
+	fflush(NULL);
 	_exit(0);
     }
     /* parent */

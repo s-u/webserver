@@ -544,6 +544,9 @@ static void restore_SIGPIPE(void) {
 
 static int RS_fork(client_connection_t *arg) {
 #ifndef WIN32
+	/* flush stdio so the child does not inherit (and later re-emit)
+	   buffered output of the parent */
+	fflush(NULL);
 	return (arg->info.srv && arg->info.srv->fork) ? arg->info.srv->fork(arg) : fork();
 #else
 	return -1;
@@ -679,7 +682,10 @@ void serverLoop(void) {
 						   but it is forked, so the only right thing to do is to exit */
 						if ((srv->flags & SRV_FORK) && is_child) {
 							DBG(ulog_debug("serverLoop: child pid=%d done, terminating", (int) getpid()));
-							exit(2);
+							/* _exit(): don't run the parent's atexit handlers
+							   or stdio clean-up, but flush our own output */
+							fflush(NULL);
+							_exit(2);
 						}
 #endif
 					} else {
