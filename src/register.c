@@ -13,7 +13,6 @@ SEXP C_fds2file(SEXP sFile, SEXP sWhich, SEXP sAppend,
                 SEXP sMode, SEXP sClose);
 
 static const R_CallMethodDef CallEntries[] = {
-    {"C_add_handler",         (DL_FUNC) &C_add_handler,          1},
     {"C_remove_all_handlers", (DL_FUNC) &C_remove_all_handlers,  0},
     {"C_start",               (DL_FUNC) &C_start,                6},
     {"C_parse_headers",       (DL_FUNC) &C_parse_headers,        1},
@@ -21,8 +20,13 @@ static const R_CallMethodDef CallEntries[] = {
     {NULL, NULL, 0}
 };
 
+static const R_ExternalMethodDef ExternalEntries[] = {
+    {"C_add_handler",         (DL_FUNC) &C_add_handler,         -1},
+    {NULL, NULL, 0}
+};
+
 void R_init_webserver(DllInfo *dll)
 {
-    R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
+    R_registerRoutines(dll, NULL, CallEntries, NULL, ExternalEntries);
     R_useDynamicSymbols(dll, FALSE);
 }
