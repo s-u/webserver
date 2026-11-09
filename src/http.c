@@ -505,6 +505,10 @@ static void process_request(client_connection_t *c)
 				if (hlen && res.headers[hlen - 1] != '\n')
 					send_response(c, "\r\n", 2);
 			}
+			/* tell HTTP/1.1 clients that we will close the connection (RFC 9112, 9.6),
+			   for HTTP/1.0 that is the default */
+			if ((c->attr & CONNECTION_CLOSE) && IS_HTTP_1_1(c))
+				send_response(c, "Connection: close\r\n", 19);
 			/* 1xx, 204 and 304 responses can NOT have a body nor Content-Length
 			   (RFC 9110, 8.6 and RFC 9112, 6.3) - any payload is ignored */
 			if (code < 200 || code == 204 || code == 304) {

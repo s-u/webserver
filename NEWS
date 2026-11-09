@@ -32,3 +32,6 @@
 
    o	Connection: is parsed as a list of tokens, so e.g.
 	"Connection: keep-alive, close" closes the connection.
+
+   o	HTTP/1.1 responses include Connection: close if the server
+	will close the connection (RFC 9112, 9.6).
