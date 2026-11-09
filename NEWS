@@ -17,3 +17,8 @@
 	see the same as with Content-Length. Other transfer codings
 	are still answered with 501, Transfer-Encoding together with
 	Content-Length, in HTTP/1.0 or with GET/HEAD with 400.
+
+   o	reject header fields with whitespace between the name and the
+	colon with 400 (RFC 9112, 5.1). Previously such Content-Length
+	or Transfer-Encoding fields were ignored, so the body was parsed
+	as the next request (request smuggling).

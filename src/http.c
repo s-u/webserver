@@ -1013,10 +1013,24 @@ static void http_input_iteration_(client_connection_t *c) {
 								}
 							}
 						}
-						while (*k && *k != ':') {
-							if (*k >= 'A' && *k <= 'Z')
-								*k |= 0x20;
-							k++;
+						{
+							int ws = 0;
+							while (*k && *k != ':') {
+								if (*k >= 'A' && *k <= 'Z')
+									*k |= 0x20;
+								else if (*k == ' ' || *k == '\t')
+									ws = 1;
+								k++;
+							}
+							/* whitespace in the field name (incl. before the colon) must be rejected
+							   (RFC 9112, 5.1), otherwise e.g. "Content-Length : n" would be ignored
+							   and the body misread as the next request (request smuggling) */
+							if (ws && *k == ':') {
+								send_http_response(c, " 400 Bad Request (invalid header)\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+								http_close(c);
+								end_pool();
+								return;
+							}
 						}
 						if (*k == ':') {
 							*(k++) = 0;
