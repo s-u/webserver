@@ -32,6 +32,8 @@
 
 #include "ulog.h"
 
+#include <R_ext/Print.h>
+
 const char *prefix[8] = { "EMERGENCY", "ALERT", "CRITICAL", "ERROR",
 			  "WARNING", "NOTE", "INFO", "DEBUG" };
 int prefix_len[8] = { 9, 5, 8, 5, 7, 4, 4, 5 };
@@ -138,7 +140,7 @@ void ulog_begin(int level) {
 	    /* FIXME: we don't resolve host names - only IPs are supported for now */
 	}
 #ifdef RSERV_DEBUG
-	fprintf(stderr, "ULOG: begin %s %s port=%d\n", (u_family == AF_INET) ? "INET" : "UNIX", (u_sock == SOCK_DGRAM) ? "DGRAM" : "STREAM", ulog_port);
+	Rprintf("ULOG: begin %s %s port=%d\n", (u_family == AF_INET) ? "INET" : "UNIX", (u_sock == SOCK_DGRAM) ? "DGRAM" : "STREAM", ulog_port);
 #endif
 	ulog_sock = socket(u_family, u_sock, 0);
 	if (ulog_sock == -1) return;
@@ -208,9 +210,9 @@ void ulog_end(void) {
     if (buf_level <= ULOG_MAX_LEVEL)
 #endif
 #ifdef ULOG_SHORT
-    fprintf(stderr, "ULOG: %s\n", buf + buf_preamble);
+    Rprintf("ULOG: %s\n", buf + buf_preamble);
 #else
-    fprintf(stderr, "ULOG: %s\n", buf);
+    Rprintf("ULOG: %s\n", buf);
 #endif
 #endif
     if (ulog_sock != -1) {

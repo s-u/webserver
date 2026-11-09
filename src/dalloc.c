@@ -1,8 +1,12 @@
 /* do NOT include dalloc.h since it overrides system allocators */
 
+#include <R_ext/Print.h>
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#include "ulog.h"
 
 #define F_STRING 1
 #define F_FREED  2
@@ -77,7 +81,7 @@ static allocation *imp_malloc(size_t len) {
     if (a_stack->size - a_stack->a_next < len) {
 #ifdef ALLOC_SINGLE
 	/* for debugging purpose and memory pressure tests */
-	fprintf(stderr, "ERROR: stack filled, emulating out of memory condition\n");
+	ulog_error("ERROR: stack filled, emulating out of memory condition\n");
 	return 0;
 #else
 	if (!(a_stack->next = new_stack(a_stack->size)))
@@ -93,8 +97,8 @@ static allocation *imp_malloc(size_t len) {
     al->owner = a_stack;
     al->a_size = len;
 #ifdef ALLOC_DEBUG
-    fprintf(stderr, "imp_malloc: %p .. %p (%ld .. %ld, %ld)\n",
-	    (void*) al, (void*) (((char*)al) + al->a_size), (long) a_stack->a_last, (long) a_stack->a_next, (long) len);
+    ulog_debug("imp_malloc: %p .. %p (%ld .. %ld, %ld)\n",
+	       (void*) al, (void*) (((char*)al) + al->a_size), (long) a_stack->a_last, (long) a_stack->a_next, (long) len);
 #endif
     return al;
 }
@@ -104,18 +108,18 @@ static void imp_free(void *ptr) {
     alloc_stack *as = al->owner;
     size_t my_pos = ((char*) ptr) - as->data, pos = my_pos + al->a_size;
 #ifdef ALLOC_DEBUG
-    fprintf(stderr, "imp_free(%p, %ld, %ld) [stack=%ld->%ld] ", ptr, (long) my_pos, (long) al->a_size, (long) as->a_last, (long) as->a_next);
+    ulog_debug("imp_free(%p, %ld, %ld) [stack=%ld->%ld] ", ptr, (long) my_pos, (long) al->a_size, (long) as->a_last, (long) as->a_next);
 #endif
     /* check if all entries behind us are free */
     while (pos < as->a_next && ((cal = (allocation*)(as->data + pos))->flags & F_A_FREE)) {
 #ifdef ALLOC_DEBUG
-	fprintf(stderr, "<%ld->%ld is free> ", pos, pos + cal->a_size);
+	ulog_debug("<%ld->%ld is free> ", pos, pos + cal->a_size);
 #endif
 	pos += cal->a_size;
     }
     if (pos < as->a_next) { /* cannot free, just flag */
 #ifdef ALLOC_DEBUG
-	fprintf(stderr, "(%ld and has non-free neighbor at %ld)\n", (long) my_pos, (long) pos);
+	ulog_debug("(%ld and has non-free neighbor at %ld)\n", (long) my_pos, (long) pos);
 #endif
 	al->flags |= F_A_FREE;
     } else {
@@ -125,13 +129,13 @@ static void imp_free(void *ptr) {
 	if (!al->a_prev) { /* everything got released */
 	    as->a_next = as->a_last = 0;
 #ifdef ALLOC_DEBUG
-	    fprintf(stderr, "(leads to empty stack)\n");
+	    ulog_debug("(leads to empty stack)\n");
 #endif
 	} else {
 	    as->a_last = ((char*)(al->a_prev)) - as->data;
 	    as->a_next = as->a_last + al->a_prev->a_size;
 #ifdef ALLOC_DEBUG
-	    fprintf(stderr, "(full release %ld, last=%ld, next=%ld)\n", (long) my_pos, (long) as->a_last, (long) as->a_next);
+	    ulog_debug("(full release %ld, last=%ld, next=%ld)\n", (long) my_pos, (long) as->a_last, (long) as->a_next);
 #endif
 	}
     }
@@ -150,12 +154,12 @@ void *d_malloc(allocation_pool *ap, size_t size, const char *fn, int line) {
 	    global = d_new_pool(NULL, fn, line);
 	ap = last_pool ? last_pool : global;
 #ifdef ALLOC_REPORT_ALL
-	fprintf(stderr, "NOTE: allocation without a pool (%ld bytes, %s:%d) using %s\n",
-		(long) size, fn, line, ap->region);
+	ulog_note("NOTE: allocation without a pool (%ld bytes, %s:%d) using %s\n",
+		  (long) size, fn, line, ap->region);
 #endif
     }
 #ifdef ALLOC_REPORT_ALL
-    fprintf(stderr, "INFO: alloc %p (%ld, %s:%d) %s\n", (void*) al->data, (long) size, fn, line, ap->region);
+    ulog_info("INFO: alloc %p (%ld, %s:%d) %s\n", (void*) al->data, (long) size, fn, line, ap->region);
 #endif
     al->pool = ap;
     al->next = al->prev = 0;
@@ -188,17 +192,18 @@ void *d_malloc(allocation_pool *ap, size_t size, const char *fn, int line) {
 }
 
 void  d_free(allocation_pool *ap, void *ptr, const char *fn, int line) {
-    allocation *al = ptr2alloc(ptr), *pal = al;
+    allocation *al = ptr2alloc(ptr);
+#ifdef ALLOC_REPORT_ALL
+    allocation *pal = al;
     int depth = 0;
     while ((pal = pal->prev))
 	depth++;
 
-#ifdef ALLOC_REPORT_ALL
     if (!ap)
-	fprintf(stderr, "NOTE: freeing %p %s (%ld bytes) without pool, assigned to %s (%s:%d)\n",
+	ulog_note("NOTE: freeing %p %s (%ld bytes) without pool, assigned to %s (%s:%d)\n",
 		ptr, (al->flags & F_STRING) ? ((char*)ptr) : "", al->size, al->pool->region, fn, line);
     else if (al->pool != ap)
-	fprintf(stderr, "NOTE: freeing %p %s (%ld bytes) from %s but was allocated in %s (%s:%d)\n",
+	ulog_note("NOTE: freeing %p %s (%ld bytes) from %s but was allocated in %s (%s:%d)\n",
 		ptr, (al->flags & F_STRING) ? ((char*)ptr) : "", al->size, ap->region, al->pool->region, fn, line);
 #endif
     ap = al->pool;
@@ -214,7 +219,7 @@ void  d_free(allocation_pool *ap, void *ptr, const char *fn, int line) {
     g_n_free++;
     g_cur_size -= al->size;
 #ifdef ALLOC_REPORT_ALL
-    fprintf(stderr, "INFO: free %p (%ld, %s:%d, depth %d) %s\n", (void*) al->data, (long) al->size, fn, line, depth, ap->region);
+    ulog_info("INFO: free %p (%ld, %s:%d, depth %d) %s\n", (void*) al->data, (long) al->size, fn, line, depth, ap->region);
 #endif
 #ifdef TRACK_ALL_ALLOC
     al->flags |= F_FREED;
@@ -255,7 +260,7 @@ allocation_pool *d_new_pool(const char *region, const char *fn, int line) {
     ap->prev = last_pool;
     last_pool = ap;
 #ifdef ALLOC_REPORT_ALL
-    fprintf(stderr, "INFO: new allocation pool %s (%s:%d)\n", region, fn, line);
+    ulog_info("INFO: new allocation pool %s (%s:%d)\n", region, fn, line);
 #endif
     return ap;
 }
@@ -265,7 +270,7 @@ void  d_report_pool(allocation_pool *ap, const char *fn, int line) {
     if (!ap) {
 	if (global) {
 	    d_report_pool(global, fn, line);
-	    fprintf(stderr, "Global totals:\n - allocated %ld bytes, %ld objects.\n - freed %ld bytes, %ld objects.\n - delta: %ld bytes, %ld objects\n - max memory usage: %ld\n------\n",
+	    Rprintf("Global totals:\n - allocated %ld bytes, %ld objects.\n - freed %ld bytes, %ld objects.\n - delta: %ld bytes, %ld objects\n - max memory usage: %ld\n------\n",
 		    (long) g_allocs, (long) g_n_alloc,
 		    (long) g_frees, (long) g_n_free,
 		    ((long) g_allocs) - ((long) g_frees),
@@ -276,8 +281,8 @@ void  d_report_pool(allocation_pool *ap, const char *fn, int line) {
 		allocation *al = alloc_head;
 		while (al) {
 		    if (!(al->flags & F_FREED))
-			fprintf(stderr, "LEAKING: %p (%ld) %s (allocated at %s:%d)\n",
-				(void*) al->data, (long) al->size, (al->flags & F_STRING) ? al->data : "", al->fn, al->line);
+			REprintf("LEAKING: %p (%ld) %s (allocated at %s:%d)\n",
+				 (void*) al->data, (long) al->size, (al->flags & F_STRING) ? al->data : "", al->fn, al->line);
 		    al = al->abs_next;
 		}
 	    }
@@ -286,7 +291,7 @@ void  d_report_pool(allocation_pool *ap, const char *fn, int line) {
 	return;
     }
 
-    fprintf(stderr, "------\nAllocation pool report %s (%s:%d):\n - allocated %ld bytes, %ld objects.\n - freed %ld bytes, %ld objects.\n - delta: %ld bytes, %ld objects\n------\n",
+    Rprintf("------\nAllocation pool report %s (%s:%d):\n - allocated %ld bytes, %ld objects.\n - freed %ld bytes, %ld objects.\n - delta: %ld bytes, %ld objects\n------\n",
 	    ap->region, fn, line,
 	    (long) ap->allocs, (long) ap->n_alloc,
 	    (long) ap->frees, (long) ap->n_free,
@@ -294,7 +299,7 @@ void  d_report_pool(allocation_pool *ap, const char *fn, int line) {
 	    ((long) ap->n_alloc) - ((long) ap->n_free));
     al = ap->root;
     while (al) {
-	fprintf(stderr, "contains: %p (%ld) %s (allocated at %s:%d)\n",
+	Rprintf("contains: %p (%ld) %s (allocated at %s:%d)\n",
 		(void*) al->data, (long) al->size, (al->flags & F_STRING) ? al->data : "", al->fn, al->line);
 	al = al->next;
     }
@@ -303,24 +308,24 @@ void  d_report_pool(allocation_pool *ap, const char *fn, int line) {
 void  d_end_pool(allocation_pool *ap, const char *fn, int line) {
     allocation *al;
     if (!ap) {
-	fprintf(stderr, "ERROR: d_end_pool(NULL)\n");
+	ulog_error("ERROR: d_end_pool(NULL)\n");
 	return;
     }
 #ifdef ALLOC_REPORT
-    fprintf(stderr, "------\nAllocation pool report %s (%s:%d):\n - allocated %ld bytes, %ld objects.\n - freed %ld bytes, %ld objects.\n - delta: %ld bytes, %ld objects\n------\n",
+    Rprintf"------\nAllocation pool report %s (%s:%d):\n - allocated %ld bytes, %ld objects.\n - freed %ld bytes, %ld objects.\n - delta: %ld bytes, %ld objects\n------\n",
 	    ap->region, fn, line,
 	    (long) ap->allocs, (long) ap->n_alloc,
 	    (long) ap->frees, (long) ap->n_free,
 	    ((long) ap->allocs) - ((long) ap->frees),
 	    ((long) ap->n_alloc) - ((long) ap->n_free));
     if (ap == global)
-	fprintf(stderr, "FATAL: attempt to release global pool\n");
+	ulog_error("FATAL: attempt to release global pool\n");
 #endif
     if (ap == last_pool)
 	last_pool = ap->prev;
     if (ap->next) {
 #ifdef ALLOC_REPORT
-	fprintf(stderr, "WARNING: this pool is not the top of the stack: %s <%s> %s\n",
+	REprintf("WARNING: this pool is not the top of the stack: %s <%s> %s\n",
 		ap->prev ? ap->prev->region : "NULL",
 		ap->region,
 		ap->next->region);
@@ -333,11 +338,11 @@ void  d_end_pool(allocation_pool *ap, const char *fn, int line) {
     if (al) {
 #ifdef ALLOC_REPORT
 	if (last_pool)
-	    fprintf(stderr, "NOTE: MOVING LEAKS from %s ==> %s\n", ap->region, last_pool->region);
+	    Rprintf("NOTE: MOVING LEAKS from %s ==> %s\n", ap->region, last_pool->region);
 #endif
 	while (al) {
 #ifdef ALLOC_REPORT
-	    fprintf(stderr, "leaking: %p (%ld) %s (allocated at %s:%d)\n",
+	    REprintf("leaking: %p (%ld) %s (allocated at %s:%d)\n",
 		    (void*) al->data, (long) al->size, (al->flags & F_STRING) ? al->data : "", al->fn, al->line);
 #endif
 	    if (last_pool) {
