@@ -3909,7 +3909,7 @@ if test "x${want_tls}" != xno; then
    if test "x${OPENSSL_INCLUDES}" != x; then
       CPPFLAGS="${CPPFLAGS} -I${OPENSSL_INCLUDES}"
    else
-      if test x"${PKG_CPPFLAGS}" = x -a x"${PKG_LIBS}" = x -a x"$PKGCONFIG" != x; then
+      if test x"${PKG_CPPFLAGS}" = x && test x"${PKG_LIBS}" = x && test x"$PKGCONFIG" != x; then
          { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $PKGCONFIG" >&5
 printf %s "checking for $PKGCONFIG... " >&6; }
 	 if $PKGCONFIG --version >/dev/null 2>&1; then
