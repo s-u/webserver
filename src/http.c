@@ -435,14 +435,14 @@ static void process_request(client_connection_t *c)
 				send_http_response(c, " 200 OK\r\nContent-Type: ");
 				send_response(c, ct, strlen(ct));
 			} else if (code == 304) { /* not modified - don't need content type */
-				sprintf(buf, "%s 304 Not Modified", HTTP_SIG(c));
+				snprintf(buf, sizeof(buf) - 1, "%s 304 Not Modified", HTTP_SIG(c));
 				send_response(c, buf, strlen(buf));
 			} else if (code >= 400 && code <= 406) {
-				sprintf(buf, "%s %d %s\r\nContent-Type: ", HTTP_SIG(c), code, http_40x[code - 400]);
+				snprintf(buf, sizeof(buf) - 1, "%s %d %s\r\nContent-Type: ", HTTP_SIG(c), code, http_40x[code - 400]);
 				send_response(c, buf, strlen(buf));
 				send_response(c, ct, strlen(ct));
 			} else {
-				sprintf(buf, "%s %d Code %d\r\nContent-Type: ", HTTP_SIG(c), code, code);
+				snprintf(buf, sizeof(buf) - 1, "%s %d Code %d\r\nContent-Type: ", HTTP_SIG(c), code, code);
 				send_response(c, buf, strlen(buf));
 				send_response(c, ct, strlen(ct));
 			}
@@ -455,7 +455,7 @@ static void process_request(client_connection_t *c)
 				send_response(c, "\r\n", 2);
 			else {
 				char date[32];
-				sprintf(buf, "\r\nDate: %s\r\n", posix2http(res.date, date));
+				snprintf(buf, sizeof(buf) - 1, "\r\nDate: %s\r\n", posix2http(res.date, date));
 				send_response(c, buf, strlen(buf));
 			}
 
@@ -490,7 +490,7 @@ static void process_request(client_connection_t *c)
 						fsz = ftell(f);
 						fseek(f, 0, SEEK_SET);
 					}
-					sprintf(buf, "Content-Length: %ld\r\n\r\n", fsz);
+					snprintf(buf, sizeof(buf) - 1, "Content-Length: %ld\r\n\r\n", fsz);
 					send_response(c, buf, strlen(buf));
 					if (c->method != METHOD_HEAD) {
 						fbuf = (char*) malloc(32768);
@@ -533,7 +533,7 @@ static void process_request(client_connection_t *c)
 					end_pool();
 					return;
 				}
-				sprintf(buf, "Content-Length: 0\r\n\r\n");
+				strcpy(buf, "Content-Length: 0\r\n\r\n");
 				send_response(c, buf, strlen(buf));
 				http_free_result(&res);
 				fin_request(c);
@@ -550,7 +550,7 @@ static void process_request(client_connection_t *c)
 						if (res.range_start <= payload_end)
 							payload_start = res.range_start;
 					}
-					sprintf(buf, "Content-Length: %lu\r\n\r\n",
+					snprintf(buf, sizeof(buf) - 1, "Content-Length: %lu\r\n\r\n",
 							(unsigned long) (payload_end - payload_start));
 					send_response(c, buf, strlen(buf));
 					if (c->method != METHOD_HEAD)
