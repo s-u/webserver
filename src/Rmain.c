@@ -202,9 +202,13 @@ SEXP C_start(SEXP sPort, SEXP sSock, SEXP sThreads, SEXP sFork, SEXP sIPv6, SEXP
     rm_server(http_server);
     free(http_server);
     ulog_info("clean shutdown");
+#ifdef ALLOC_REPORT
     report_pool();
+#endif
     end_pool();
+#ifdef ALLOC_REPORT
     alloc_global_report();
+#endif
     return R_NilValue;
 }
 
