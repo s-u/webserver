@@ -135,6 +135,7 @@ int verify_peer_tls(client_connection_t *c, char *cn, int len) {
     return -1;
 }
 
+#if 0 /* Can't use stderr in R */
 int perror_tls(const char *format, ...) {
     va_list(ap);
     va_start(ap, format);
@@ -143,6 +144,7 @@ int perror_tls(const char *format, ...) {
     va_end(ap);
     return 1;
 }
+#endif
 
 #else /* no SSL/TLS support, ignore everything, fail on everything */
 
@@ -162,9 +164,11 @@ void copy_tls(client_connection_t *src, client_connection_t *dst) { }
 void close_tls(client_connection_t *c) { }
 int verify_peer_tls(client_connection_t *c, char *cn, int len) { return -1; }
 
+#if 0
 int perror_tls(const char *format, ...) {
     fprintf(stderr, "ERROR: this binary has been built without SSL/TLS support.\n");
     return 1;
 }
+#endif
 
 #endif
