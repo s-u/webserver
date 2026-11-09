@@ -21,9 +21,6 @@
 #define SRV_FORK      0x02000 /* fork on accept (mutually exclusive with
 								 SRV_ASYNC_*) */
 #define SRV_NONBLOCK  0x10000 /* use non-blocking connections */
-#define SRV_INIT_RNG  0x20000 /* request separate RNG for each connection
-								 (if not set, forked servers may yield
-								 identical RNG chains) */
 
 #include <unistd.h>
 #include <stddef.h>

@@ -33,7 +33,10 @@ webstart(port = 8080L, threads = 4L, fork = FALSE, socket, ipv6 = FALSE,
 \item{threads}{integer, number of threads for the server to use.}
 \item{fork}{logical, if \code{TRUE} then a new process is forked for
   each connection. Mutually exclusive with \code{threads > 0}
-  (\code{threads} will be set to 0 with a warning).}
+  (\code{threads} will be set to 0 with a warning). Forked children
+  inherit the RNG state of the parent, so remove \code{.Random.seed}
+  from the global environment before starting the server if
+  independent random streams are needed.}
 \item{socket}{string, path of a local (unix) socket to listen on
   instead of a TCP port. If missing, TCP is used. Not supported on
   Windows.}

@@ -1,0 +1,5 @@
+1.0-0
+   o	forked children (fork=TRUE) no longer try to re-seed the
+	system RNG (the code was never active). They inherit the R RNG
+	state of the parent, see ?webstart for how to get independent
+	random streams.

@@ -705,8 +705,6 @@ void serverLoop(void) {
 	end_pool();
 }
 
-#include <time.h>
-
 #ifndef WIN32
 static pid_t parentPID;
 #endif
@@ -735,13 +733,6 @@ int prepare_child(client_connection_t *args) {
 			strcpy(main_argv[0] + strlen(main_argv[0]) - 8, "/RsrvCHx");
 #endif
 		is_child = 1;
-
-		if (args->info.srv->flags & SRV_INIT_RNG) { /* this is not great, but better than nothing */
-			long rseed = random();
-			rseed ^= time(0);
-			rseed ^= ((long) getpid()) << 16;
-			srandom(rseed);
-		}
 
 		parentPID = getppid();
 		close_all_srv_sockets(); /* close all server sockets */
