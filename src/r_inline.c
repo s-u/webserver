@@ -20,6 +20,7 @@
 #include <time.h>
 
 #include <Rinternals.h>
+#include <Rversion.h>
 
 typedef struct r_inline {
     char *prefix;
@@ -85,7 +86,9 @@ typedef struct rs_eval {
     int exp;
 } rs_eval_t;
 
+#if R_VERSION < R_Version(4,6,0)
 extern int R_Visible;
+#endif
 
 static SEXP R_eval_do(void *arg) {
     rs_eval_t *e = (rs_eval_t*) arg;
@@ -107,6 +110,26 @@ static SEXP R_eval_do(void *arg) {
 
     if (TYPEOF(what) == EXPRSXP) {
         n = LENGTH(what);
+#if R_VERSION >= R_Version(4,6,0)
+        /* R_Visible is not part of the API (R CMD check reports it since
+           R 4.6.0), so use withVisible() instead. The function is taken
+           from base directly so it cannot be masked in rho. */
+        SEXP sWithVis = PROTECT(eval(install("withVisible"), R_BaseEnv));
+        for (i = 0; i < n; i++) {
+            SEXP wv;
+            e->exp = i;
+            wv = PROTECT(eval(PROTECT(lang2(sWithVis, VECTOR_ELT(what, i))), rho));
+            x = VECTOR_ELT(wv, 0);
+            if (i == n - 1) {
+                R_PreserveObject(x);
+                e->last = x;
+            }
+            if (asLogical(VECTOR_ELT(wv, 1)) == TRUE)
+                PrintValue(x);
+            UNPROTECT(2);
+        }
+        UNPROTECT(1);
+#else
         for (i = 0; i < n; i++) {
             e->exp = i;
             x = eval(VECTOR_ELT(what, i), rho);
@@ -117,6 +140,7 @@ static SEXP R_eval_do(void *arg) {
             if (R_Visible)
                 PrintValue(x);
         }
+#endif
     } else {
         e->exp = -1;
         x = eval(what, rho);
