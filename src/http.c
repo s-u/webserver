@@ -1090,8 +1090,15 @@ static void http_input_iteration_(client_connection_t *c) {
 									c->attr &= ~CHUNKED;
 								c->attr |= TRANSFER_ENCODING;
 							}
-							if (!strcmp(bol, "host"))
+							if (!strcmp(bol, "host")) {
+								if (c->attr & HOST_HEADER) { /* more than one Host: is invalid (RFC 9112, 3.2) */
+									send_http_response(c, " 400 Bad Request (multiple Host:)\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+									http_close(c);
+									end_pool();
+									return;
+								}
 								c->attr |= HOST_HEADER;
+							}
 							if (!strcmp(bol, "authorization")) {
 								if (c->auth)
 									free(c->auth);

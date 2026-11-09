@@ -26,3 +26,6 @@
    o	1xx, 204 and 304 responses no longer include a body or
 	Content-Length, which broke the framing of keep-alive
 	connections.
+
+   o	reject requests with more than one Host: header with 400
+	(RFC 9112, 3.2).
