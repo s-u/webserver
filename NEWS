@@ -11,3 +11,9 @@
 
    o	use withVisible() instead of the non-API R_Visible in
 	R >= 4.6.0.
+
+   o	support chunked request bodies (Transfer-Encoding: chunked).
+	The chunks are collected into the request body, so handlers
+	see the same as with Content-Length. Other transfer codings
+	are still answered with 501, Transfer-Encoding together with
+	Content-Length, in HTTP/1.0 or with GET/HEAD with 400.

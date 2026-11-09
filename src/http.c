@@ -21,6 +21,17 @@
 #define PART_REQUEST 0
 #define PART_HEADER  1
 #define PART_BODY    2
+#define PART_CHUNKED 3 /* body with Transfer-Encoding: chunked */
+
+/* states of the chunked body decoder (PART_CHUNKED) */
+#define CHUNK_SIZE     0 /* expecting chunk-size line */
+#define CHUNK_DATA     1 /* reading chunk data (chunk_left bytes left) */
+#define CHUNK_DATA_END 2 /* expecting CRLF after chunk data */
+#define CHUNK_TRAILER  3 /* reading trailer lines until an empty line */
+
+/* maximum size of the request body: R will currently have issues with
+   body around 2Gb or more, so better to not go there */
+#define MAX_BODY_SIZE 2147483640
 
 #define METHOD_POST  1
 #define METHOD_GET   2
@@ -38,8 +49,9 @@
 #define CONTENT_FORM_UENC 0x0080 /* message content type is application/x-www-form-urlencoded */
 #define WS_UPGRADE        0x0100 /* upgrade to WebSockets protocol */
 #define BAD_LENGTH        0x0200 /* conflicting or malformed Content-Length: */
-#define TRANSFER_ENCODING 0x0400 /* Transfer-Encoding: was specified (unsupported) */
+#define TRANSFER_ENCODING 0x0400 /* Transfer-Encoding: was specified */
 #define EXPECT_CONTINUE   0x0800 /* Expect: 100-continue was specified */
+#define CHUNKED           0x1000 /* Transfer-Encoding is exactly "chunked" (the only one supported) */
 
 /* used by http_send_respose to limit the size sent at once. Must be at most 31-bit */
 #define MAX_SEND_LEN (1024*1024)
@@ -92,6 +104,9 @@ struct client_connection {
 	struct buffer *headers;        /* buffer holding header lines */
 	struct aux_pass *aux;
 	int pipelined;                 /* the line buffer already holds the start of the next request */
+	int chunk_state;               /* state of the chunked body decoder (CHUNK_xx) */
+	size_t chunk_left;             /* bytes left to read in the current chunk */
+	size_t body_size;              /* allocated size of body (chunked only) */
 };
 
 typedef struct accept_connection {
@@ -171,6 +186,9 @@ static void conn_request_done(client_connection_t *c) {
 	c->method = 0;
 	c->attr = 0;
 	c->content_length = 0;
+	c->chunk_state = CHUNK_SIZE;
+	c->chunk_left = 0;
+	c->body_size = 0;
 	c->req_date = 0;
 	c->part = PART_REQUEST;
 }
@@ -571,6 +589,156 @@ static void process_request(client_connection_t *c)
 	end_pool();
 }
 
+/* decodes a chunked request body (PART_CHUNKED). The chunks are accumulated
+ * in c->body and once complete, the request is processed as if the body was
+ * sent with Content-Length, so handlers don't need to know about chunking.
+ * Note that the headers are passed as-is, i.e., Transfer-Encoding: chunked
+ * will be present, but Content-Length won't. Chunk extensions and trailer
+ * fields are ignored. If do_recv is 0 then only data already present in the
+ * line buffer are processed. */
+static void chunked_iteration(client_connection_t *c, int do_recv) {
+	server_t *srv = c->info.srv;
+	char *s, *e;
+
+	if (do_recv) {
+		int n;
+		/* read the inside of a chunk directly into the body */
+		int direct = (c->chunk_state == CHUNK_DATA && !c->line_pos);
+		if (direct)
+			n = srv->recv(c, c->body + c->body_pos, (c->chunk_left > MAX_SEND_LEN) ? MAX_SEND_LEN : c->chunk_left);
+		else
+			n = srv->recv(c, c->line_buf + c->line_pos, LINE_BUF_SIZE - c->line_pos - 1);
+		DBG(ulog_debug("[chunked recv n=%d, direct=%d, line_pos=%d, state=%d]", n, direct, c->line_pos, c->chunk_state));
+		if (n < 0) { /* error, scrap this worker */
+			/* some cases are benign */
+			if (sockerrno != EWOULDBLOCK && sockerrno != EAGAIN && sockerrno != EINTR)
+				http_close(c);
+			return;
+		}
+		if (n == 0) { /* connection closed before the whole body arrived */
+			http_close(c);
+			return;
+		}
+		if (direct) {
+			c->body_pos += n;
+			c->chunk_left -= n;
+			if (!c->chunk_left)
+				c->chunk_state = CHUNK_DATA_END;
+			return;
+		}
+		c->line_pos += n;
+	}
+
+	s = c->line_buf;
+	e = s + c->line_pos;
+	while (s < e) {
+		char *line, *eol;
+		if (c->chunk_state == CHUNK_DATA) {
+			size_t avail = e - s;
+			if (avail > c->chunk_left)
+				avail = c->chunk_left;
+			memcpy(c->body + c->body_pos, s, avail);
+			c->body_pos += avail;
+			c->chunk_left -= avail;
+			s += avail;
+			if (!c->chunk_left)
+				c->chunk_state = CHUNK_DATA_END;
+			continue;
+		}
+		/* all other states are line-based (the data can contain NULs, so use memchr) */
+		if (!(eol = (char*) memchr(s, '\n', e - s))) { /* incomplete line */
+			if (s == c->line_buf && c->line_pos >= LINE_BUF_SIZE - 1) {
+				send_http_response(c, " 413 Request entity too large\r\nConnection: close\r\n\r\n");
+				http_close(c);
+				return;
+			}
+			break;
+		}
+		line = s;
+		s = eol + 1;
+		*eol = 0;
+		if (eol > line && eol[-1] == '\r')
+			eol[-1] = 0;
+		if (c->chunk_state == CHUNK_DATA_END) {
+			if (*line) { /* data must be followed by CRLF */
+				send_http_response(c, " 400 Bad Request (invalid chunk)\r\nConnection: close\r\n\r\n");
+				http_close(c);
+				return;
+			}
+			c->chunk_state = CHUNK_SIZE;
+		} else if (c->chunk_state == CHUNK_SIZE) {
+			size_t sz = 0;
+			char *p = line;
+			while (1) {
+				int v;
+				if (*p >= '0' && *p <= '9') v = *p - '0';
+				else if (*p >= 'a' && *p <= 'f') v = *p - 'a' + 10;
+				else if (*p >= 'A' && *p <= 'F') v = *p - 'A' + 10;
+				else break;
+				sz = (sz << 4) | v;
+				if (sz > MAX_BODY_SIZE) /* also prevents overflows */
+					break;
+				p++;
+			}
+			if (sz > MAX_BODY_SIZE || c->body_pos + sz > MAX_BODY_SIZE) {
+				send_http_response(c, " 413 Request Entity Too Large (request body too big)\r\nConnection: close\r\n\r\n");
+				http_close(c);
+				return;
+			}
+			while (*p == ' ' || *p == '\t') p++;
+			if (p == line || (*p && *p != ';')) { /* no size or garbage (other than extensions) */
+				send_http_response(c, " 400 Bad Request (invalid chunk size)\r\nConnection: close\r\n\r\n");
+				http_close(c);
+				return;
+			}
+			if (!sz) /* last chunk */
+				c->chunk_state = CHUNK_TRAILER;
+			else {
+				size_t need = c->body_pos + sz + 1; /* allocate an extra termination byte */
+				if (need > c->body_size) {
+					size_t new_size = c->body_size * 2;
+					char *nb;
+					if (new_size < need) new_size = need;
+					if (new_size < 65536) new_size = 65536;
+					if (!(nb = (char*) realloc(c->body, new_size))) {
+						send_http_response(c, " 413 Request Entity Too Large (request body too big)\r\nConnection: close\r\n\r\n");
+						http_close(c);
+						return;
+					}
+					c->body = nb;
+					c->body_size = new_size;
+				}
+				c->chunk_left = sz;
+				c->chunk_state = CHUNK_DATA;
+			}
+		} else if (c->chunk_state == CHUNK_TRAILER) {
+			if (!*line) { /* empty line - we have the whole body */
+				/* keep anything that follows as the next request */
+				c->line_pos = e - s;
+				if (c->line_pos)
+					memmove(c->line_buf, s, c->line_pos);
+				if (c->body)
+					c->body[c->body_pos] = 0;
+				c->content_length = c->body_pos;
+				process_request(c);
+				if (c->attr & CONNECTION_CLOSE) {
+					http_close(c);
+					return;
+				}
+				/* keep-alive - reset the worker so it can process a new request */
+				conn_request_done(c);
+				c->pipelined = (c->line_pos > 0);
+				return;
+			}
+			/* trailer fields are ignored */
+		}
+	}
+	/* move the rest (incomplete line) to the beginning of the buffer */
+	c->line_pos = e - s;
+	if (c->line_pos && s != c->line_buf)
+		memmove(c->line_buf, s, c->line_pos);
+}
+
 /* this function is called to fetch new data from the client
  * connection socket and process it */
 static void http_input_iteration_(client_connection_t *c) {
@@ -588,6 +756,12 @@ static void http_input_iteration_(client_connection_t *c) {
      * `pipelined' makes http_input_iteration() parse the rest without waiting
      * for socket data that may never arrive (GET/HEAD only; a request with a
      * body followed by more data still closes the connection). */
+    if (c->part == PART_CHUNKED) {
+		chunked_iteration(c, 1);
+		end_pool();
+		return;
+    }
+
     if (c->part < PART_BODY) {
 		char *s = c->line_buf;
 		/* a previous request left the start of the next one in the buffer,
@@ -625,11 +799,21 @@ static void http_input_iteration_(client_connection_t *c) {
 					end_pool();
 					return;
 				}
-				if (c->attr & TRANSFER_ENCODING) { /* we cannot decode chunked bodies, so do not misread them as new requests */
-					send_http_response(c, " 501 Not Implemented (Transfer-Encoding)\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-					http_close(c);
-					end_pool();
-					return;
+				if (c->attr & TRANSFER_ENCODING) {
+					if (!(c->attr & CHUNKED)) { /* we can only decode chunked bodies, so do not misread others as new requests */
+						send_http_response(c, " 501 Not Implemented (Transfer-Encoding)\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+						http_close(c);
+						end_pool();
+						return;
+					}
+					/* conflicting framing (possible request smuggling) or chunked
+					   in HTTP/1.0 (which doesn't define it) - see RFC 9112, 6.1 */
+					if (c->attr & (CONTENT_LENGTH | HTTP_1_0)) {
+						send_http_response(c, " 400 Bad Request (invalid Transfer-Encoding)\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+						http_close(c);
+						end_pool();
+						return;
+					}
 				}
 				if (c->attr & BAD_LENGTH) {
 					send_http_response(c, " 400 Bad Request (invalid Content-Length)\r\nConnection: close\r\n\r\n");
@@ -640,7 +824,7 @@ static void http_input_iteration_(client_connection_t *c) {
 				if ((c->attr & CONTENT_LENGTH) && c->content_length) {
 					/* FIXME: limit on body size - make it configurable? */
 					if (c->content_length < 0 ||  /* we are parsing signed so negative numbers are bad */
-						c->content_length > 2147483640 || /* R will currently have issues with body around 2Gb or more, so better to not go there */
+						c->content_length > MAX_BODY_SIZE ||
 						!(c->body = (char*) malloc(c->content_length + 1 /* allocate an extra termination byte */ ))) {
 						send_http_response(c, " 413 Request Entity Too Large (request body too big)\r\nConnection: close\r\n\r\n");
 						http_close(c);
@@ -655,6 +839,26 @@ static void http_input_iteration_(client_connection_t *c) {
 				/* move the body part to the beginning of the buffer */
 				c->line_pos -= s - c->line_buf;
 				memmove(c->line_buf, s, c->line_pos);
+
+				if (c->attr & CHUNKED) {
+					/* for consistency with Content-Length below we reject GET/HEAD with body */
+					if (c->method == METHOD_GET || c->method == METHOD_HEAD) {
+						send_http_response(c, " 400 Bad Request (GET/HEAD with body)\r\nConnection: close\r\n\r\n");
+						http_close(c);
+						end_pool();
+						return;
+					}
+					/* the client waits for our go-ahead before sending the body
+					   (HTTP/1.0 was rejected above) */
+					if ((c->attr & EXPECT_CONTINUE) && !c->line_pos)
+						send_http_response(c, " 100 Continue\r\n\r\n");
+					c->part = PART_CHUNKED;
+					c->chunk_state = CHUNK_SIZE;
+					/* decode whatever part of the body we already have, but don't recv() */
+					chunked_iteration(c, 0);
+					end_pool();
+					return;
+				}
 
 				/* GET/HEAD or no content length mean no body - we got all we need */
 				if (c->method == METHOD_GET || c->method == METHOD_HEAD ||
@@ -849,8 +1053,18 @@ static void http_input_iteration_(client_connection_t *c) {
 								if (!strncmp(k, "100-continue", 12))
 									c->attr |= EXPECT_CONTINUE;
 							}
-							if (!strcmp(bol, "transfer-encoding"))
+							if (!strcmp(bol, "transfer-encoding")) {
+								/* only a single "chunked" is supported - anything else
+								   (incl. repeated headers) clears CHUNKED and is rejected */
+								char *l = k;
+								while (*l) { if (*l >= 'A' && *l <= 'Z') *l |= 0x20; l++; }
+								while (l > k && (l[-1] == ' ' || l[-1] == '\t')) l--;
+								if (!(c->attr & TRANSFER_ENCODING) && l - k == 7 && !strncmp(k, "chunked", 7))
+									c->attr |= CHUNKED;
+								else
+									c->attr &= ~CHUNKED;
 								c->attr |= TRANSFER_ENCODING;
+							}
 							if (!strcmp(bol, "host"))
 								c->attr |= HOST_HEADER;
 							if (!strcmp(bol, "authorization")) {
