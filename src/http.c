@@ -487,6 +487,17 @@ static void process_request(client_connection_t *c)
 				if (hlen && res.headers[hlen - 1] != '\n')
 					send_response(c, "\r\n", 2);
 			}
+			/* 1xx, 204 and 304 responses can NOT have a body nor Content-Length
+			   (RFC 9110, 8.6 and RFC 9112, 6.3) - any payload is ignored */
+			if (code < 200 || code == 204 || code == 304) {
+				send_response(c, "\r\n", 2);
+				if (res.payload_type == PAYLOAD_TEMPFILE && res.payload)
+					unlink(res.payload);
+				http_free_result(&res);
+				fin_request(c);
+				end_pool();
+				return;
+			}
 			if (res.payload_type == PAYLOAD_FILE || res.payload_type == PAYLOAD_TEMPFILE) {
 				const char *fn = res.payload;
 				if (fn) {
