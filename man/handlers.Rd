@@ -67,7 +67,7 @@ found.
   \code{addHandler("rfun", prefix, FUN, parse.query=TRUE,
     parse.headers=TRUE, fork=FALSE)}
 
-  \itemize{
+  \describe{
     \item{FUN}{function to call for a request (see below for details)}
     \item{parse.query}{logical, if \code{TRUE} then the query string is
       parsed into a named character vector, otherwise it is just one
@@ -84,7 +84,7 @@ found.
 
   \code{function(path, query, body, headers, ...)}
 
-  \itemize{
+  \describe{
     \item{path}{string, path of the request}
     \item{query}{query string part of the request. If
       \code{parse.query=TRUE} (the default) then the query string is
@@ -113,7 +113,7 @@ found.
 
   Only the first list element is mandatory, all others are optional.
 
-  \itemize{
+  \describe{
     \item{result}{Can be either a string or a raw vector containing the
       body of the result to return to the client. As a special case, the
       result can be a named character vector of length one with either
