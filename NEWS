@@ -35,3 +35,5 @@
 
    o	HTTP/1.1 responses include Connection: close if the server
 	will close the connection (RFC 9112, 9.6).
+
+   o	fix a crash when the header buffer cannot be allocated.

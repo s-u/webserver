@@ -996,6 +996,12 @@ static void http_input_iteration_(client_connection_t *c) {
 							/* we generate a header with the method so it can be passed to the handler */
 							if (!c->headers)
 								c->headers = alloc_buffer(1024, NULL);
+							if (!c->headers) {
+								ulog_error("out of memory when allocating header buffer");
+								http_close(c);
+								end_pool();
+								return;
+							}
 							/* make sure it fits */
 							if (c->headers->size - c->headers->length >= 18 + (mend - bol)) {
 								if (!c->method) c->method = METHOD_OTHER;
