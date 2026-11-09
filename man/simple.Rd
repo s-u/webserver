@@ -13,7 +13,8 @@
 simple(port=8080L, path=".", prefix="/", index="index.html", start=TRUE,
        Rfun=get0(".http.request"), Rfun.prefix="/", threads=4L, ...)
 
-webstart(port = 8080L, threads = 4L)
+webstart(port = 8080L, threads = 4L, fork = FALSE, socket, ipv6 = FALSE,
+         local = TRUE)
 }
 \arguments{
 \item{port}{integer, port on which to listen}
@@ -30,6 +31,15 @@ webstart(port = 8080L, threads = 4L)
   handler. If both prefixes match, the static handler is evaluated first
   and will proceed to the R handler if no static file was found.}
 \item{threads}{integer, number of threads for the server to use.}
+\item{fork}{logical, if \code{TRUE} then a new process is forked for
+  each connection. Mutually exclusive with \code{threads > 0}
+  (\code{threads} will be set to 0 with a warning).}
+\item{socket}{string, path of a local (unix) socket to listen on
+  instead of a TCP port. If missing, TCP is used. Not supported on
+  Windows.}
+\item{ipv6}{logical, if \code{TRUE} then the server listens on IPv6.}
+\item{local}{logical, if \code{TRUE} then the server binds only to the
+  loopback interface, i.e., only local connections are accepted.}
 \item{\dots}{additonal parameters passed to \code{webstart}}
 }
 \value{\code{TRUE}, invisibly}
