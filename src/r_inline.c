@@ -5,6 +5,11 @@
 
 */
 
+/* for pthread_getattr_np() */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "ulog.h"
 #include "http.h"
 #include "http_tools.h"
@@ -18,6 +23,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <pthread.h>
 
 #include <Rinternals.h>
 #include <Rversion.h>
@@ -43,8 +49,10 @@ void r_inline_free(r_inline *obj) {
    Note that the evaluation will still happen in the 
    process thread, but the mutex guarantees that it is always
    done in a synchronized fashion. Because the calls are
-   on different threads, we have to disable the R's stack
-   limit checks since they won't work.
+   on different threads, R's stack limit checks would measure
+   the wrong stack, so we point them at the stack of the
+   calling thread for the duration of each call (or disable
+   them where we cannot determine it).
    Note that this works mainly because we know that our
    accept code is running on the main thread, which will
    never enter R.
@@ -56,13 +64,39 @@ void r_inline_free(r_inline *obj) {
 
 static async_queue *r_queue;
 
-extern uintptr_t R_CStackLimit;
+/* set if R is evaluated on threads other than the main one. Unlike r_queue
+   this stays set in forked workers, since those run on the stack of the
+   thread that forked them */
+static int r_off_main;
+
+extern uintptr_t R_CStackLimit, R_CStackStart;
 
 void r_inline_setup(int flags) {
     if ((flags & RIF_ASYNC) && !r_queue) {
 	r_queue = async_queue_new();
-	R_CStackLimit = -1;
+	r_off_main = 1;
     }
+}
+
+/* Returns the number of bytes of C stack available below `here` in the
+   calling thread or 0 if it cannot be determined. Assumes that the stack
+   grows down (which is the case on all platforms supported by R). */
+static size_t thread_stack_avail(const char *here) {
+    uintptr_t low = 0;
+#if defined(__APPLE__)
+    pthread_t self = pthread_self();
+    low = (uintptr_t) pthread_get_stackaddr_np(self) - pthread_get_stacksize_np(self);
+#elif defined(__linux__)
+    pthread_attr_t attr;
+    void *addr;
+    size_t size;
+    if (pthread_getattr_np(pthread_self(), &attr))
+	return 0;
+    if (!pthread_attr_getstack(&attr, &addr, &size))
+	low = (uintptr_t) addr;
+    pthread_attr_destroy(&attr);
+#endif
+    return (low && (uintptr_t) here > low) ? (size_t) ((uintptr_t) here - low) : 0;
 }
 
 r_inline *r_inline_entry(const char *prefix, SEXP sFun, int flags) {
@@ -333,6 +367,7 @@ void r_inline_end() {
 	async_queue_finish(r_queue);
 	async_queue_free(r_queue);
 	r_queue = 0;
+	r_off_main = 0;
     }
 }
 
@@ -466,7 +501,19 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 
     if (r_queue)
 	async_queue_begin(r_queue);
-    r_inline_process(req, res, r->sFun, r->flags);
+    if (r_off_main) { /* R's stack checks have to use the stack of this thread */
+	char here;
+	uintptr_t stack_start = R_CStackStart, stack_limit = R_CStackLimit;
+	size_t avail = thread_stack_avail(&here);
+	R_CStackStart = (uintptr_t) &here;
+	/* R only checks against 95% of the limit and needs the rest
+	   (and then some) to handle the overflow error, so leave a reserve */
+	R_CStackLimit = avail ? (uintptr_t) (avail / 10 * 9) : (uintptr_t) -1;
+	r_inline_process(req, res, r->sFun, r->flags);
+	R_CStackStart = stack_start;
+	R_CStackLimit = stack_limit;
+    } else
+	r_inline_process(req, res, r->sFun, r->flags);
     if (r_queue)
 	async_queue_end(r_queue);
     end_pool();

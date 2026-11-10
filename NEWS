@@ -40,3 +40,8 @@
 
    o	R handlers can close the connection by including
 	Connection: close in their headers.
+
+   o	R handlers evaluated on processing threads (threads > 0) now
+	have working C stack checks using the stack of the thread.
+	Previously the checks were disabled, so runaway recursion
+	could crash the server instead of raising an R error.
