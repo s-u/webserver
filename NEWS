@@ -45,3 +45,6 @@
 	have working C stack checks using the stack of the thread.
 	Previously the checks were disabled, so runaway recursion
 	could crash the server instead of raising an R error.
+
+   o	fix compilation with the UCRT headers of Rtools 4.x
+	(redefinition of timespec_get()).

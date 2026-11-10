@@ -7,6 +7,7 @@
 #include "ulog.h"
 #include "server.h"
 
+#ifdef NEED_TIMESPEC_GET
 int timespec_get(struct timespec *ts, int base) {
     __int64 wintime;
     GetSystemTimeAsFileTime((FILETIME*)&wintime);
@@ -15,6 +16,7 @@ int timespec_get(struct timespec *ts, int base) {
     ts->tv_nsec = wintime % 10000000LL * 100;
     return base;
 }
+#endif
 
 #ifndef SOCKADDR
 #define SOCKADDR struct sockaddr

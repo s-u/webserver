@@ -18,9 +18,14 @@ typedef int socklen_t;
 #define SHUT_RD SD_RECEIVE
 #define SHUT_WR SD_SEND
 #define SHUT_RDWR SD_BOTH
-#define TIME_UTC 1
 
+/* timespec_get() is C11, older Windows runtimes don't have it */
+#ifndef TIME_UTC
+#define TIME_UTC 1
+#define NEED_TIMESPEC_GET 1
 int timespec_get(struct timespec *ts, int base);
+#endif
+
 int pipe(SOCKET fds[2]);
 
 #endif
