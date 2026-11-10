@@ -194,6 +194,8 @@ struct client_connection {
     char  *buf;
 };
 
+#ifndef WIN32
+/* finalizer of the connections to forked workers */
 static void r_conn_fin(client_connection_t *c) {
     DBG(ulog_debug("r_ext: finalizing worker %p (pid=%d)", (void*) c, (int) (c ? c->pid : -1)));
     if (!c)
@@ -202,7 +204,6 @@ static void r_conn_fin(client_connection_t *c) {
 	closesocket(c->info.s);
 	c->info.s = -1;
     }
-#ifndef WIN32
     if (c->pid) { /* are we the parent of a worker ? */
 	int stat = 0;
 	pid_t wp = 0;
@@ -238,10 +239,10 @@ static void r_conn_fin(client_connection_t *c) {
 	DBG(ulog_debug("r_ext: r_conn_fin - wait result for worker %p (pid=%d) = %d (stat=%d)",
 		       (void*) c, (int) c->pid, (int) wp, stat));
     }
-#endif
     if (c->buf)
 	free(c->buf);
 }
+#endif
 
 static void r_msg_finished(client_connection_t *c) {
     /* properly processed message */
@@ -415,6 +416,8 @@ static void r_process(client_connection_t *c) {
     }
 }
 
+#ifndef WIN32
+/* the virtual server of the connections to forked workers */
 static server_t *remote_server;
 
 static server_t *new_remote_server(int flags) {
@@ -429,6 +432,7 @@ static server_t *new_remote_server(int flags) {
     srv->flags     = flags;
     return srv;
 }
+#endif
 
 int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t *res) {
     size_t l = build_request_hdr(req, &c->hdr, c->buf, c->alloc);
@@ -519,9 +523,6 @@ void r_ext_close(client_connection_t *c) {
     }
 }
 
-/* the one connection handled by the child process */
-static client_connection_t *work_conn;
-
 #ifndef WIN32
 /* SIGHUP is how the parent tells the worker to go away. Closing the
    connection is not enough, because workers forked later inherit the
@@ -571,9 +572,6 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
 	c->info.s = ios[1];
 	c->info.srv = remote_server;
 	c->ri = r_inline_worker_entry(ri);
-	/* in the child this should be the only connection as
-	   we process it synchronously */
-	work_conn = c;
 #ifndef WIN32
 	{
 	    sigset_t set;

@@ -471,7 +471,9 @@ void close_server_sockets_in_child(int keep) {
 void close_server_sockets_in_child(int keep) {}
 #endif
 
+#ifndef WIN32
 static int is_child = 0;
+#endif
 
 ssize_t server_recv(client_connection_t *arg, void *buf, size_t len) {
 	return recv(arg->info.s, buf, len, 0);
@@ -542,16 +544,14 @@ static void restore_SIGPIPE(void) {
 }
 #endif
 
-static int RS_fork(client_connection_t *arg) {
 #ifndef WIN32
+static int RS_fork(client_connection_t *arg) {
 	/* flush stdio so the child does not inherit (and later re-emit)
 	   buffered output of the parent */
 	fflush(NULL);
 	return (arg->info.srv && arg->info.srv->fork) ? arg->info.srv->fork(arg) : fork();
-#else
-	return -1;
-#endif
 }
+#endif
 
 static void accept_process(client_connection_t *srv_conn) {
 	/* we may not know the size of args since servers may
