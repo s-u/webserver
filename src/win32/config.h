@@ -2,7 +2,7 @@
 /* src/config.h.in.  Generated from configure.ac by autoheader.  */
 
 /* If defined TLS/SSL support is enabled. */
-#define HAS_TLS 1
+#define HAVE_TLS 1
 
 /* Define to 1 if you have the `connect' function. */
 /* #undef HAVE_CONNECT */
