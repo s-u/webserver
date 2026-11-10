@@ -264,7 +264,18 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 			return 0;
 		}
 		strcpy(lusa.sun_path, localSocketName);
-		remove(localSocketName); /* remove existing if possible */
+		{ /* remove an existing socket (e.g., left over by a crashed server),
+			 but nothing else */
+			struct stat st;
+			if (!lstat(localSocketName, &st)) {
+				if (!S_ISSOCK(st.st_mode)) {
+					ulog_error("ERROR: '%s' exists and is not a socket", localSocketName);
+					closesocket(ss);
+					return 0;
+				}
+				remove(localSocketName);
+			}
+		}
 #endif
 	} else
 #ifdef HAVE_IPV6
@@ -277,6 +288,16 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 		ulog_error("no available socket: %s", strerror(errno));
 		return 0;
 	}
+
+#if defined(HAVE_IPV6) && defined(IPV6_V6ONLY)
+	/* IPv6 sockets only accept IPv6 connections: the default differs between
+	   systems (Linux and macOS also accept IPv4 by default, Windows does not),
+	   so IPv4 always needs its own listener */
+	if (!localSocketName && (flags & SRV_IPV6)) {
+		int on = 1;
+		setsockopt(ss, IPPROTO_IPV6, IPV6_V6ONLY, (const char*) &on, sizeof(on));
+	}
+#endif
 
 	srv = (server_t*) calloc(1, sizeof(server_t));
 	if (!srv) {
