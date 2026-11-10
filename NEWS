@@ -37,3 +37,6 @@
 	will close the connection (RFC 9112, 9.6).
 
    o	fix a crash when the header buffer cannot be allocated.
+
+   o	R handlers can close the connection by including
+	Connection: close in their headers.

@@ -314,18 +314,28 @@ static int uri_decode(char *s)
     return bad;
 }
 
+/* case-insensitive match of lowercase letters (and other characters
+   outside of A-Z) in s against the first n characters of lc */
+static int lc_match(const char *s, const char *lc, size_t n) {
+	size_t i = 0;
+	while (i < n && (s[i] == lc[i] || (s[i] >= 'A' && s[i] <= 'Z' && (s[i] | 0x20) == lc[i])))
+		i++;
+	return i == n;
+}
+
 /* returns non-zero if the comma-separated list (e.g., the value of
-   Connection:) contains the token. Both are assumed to be lowercase. */
+   Connection:) contains the token. The token must be lowercase,
+   the list is compared case-insensitively and ends at NUL, CR or LF. */
 static int has_token(const char *list, const char *token) {
 	size_t tl = strlen(token);
-	while (*list) {
+	while (*list && *list != '\r' && *list != '\n') {
 		const char *e, *t;
 		while (*list == ' ' || *list == '\t' || *list == ',') list++;
 		e = list;
-		while (*e && *e != ',') e++;
+		while (*e && *e != ',' && *e != '\r' && *e != '\n') e++;
 		t = e;
 		while (t > list && (t[-1] == ' ' || t[-1] == '\t')) t--;
-		if ((size_t) (t - list) == tl && !memcmp(list, token, tl))
+		if ((size_t) (t - list) == tl && lc_match(list, token, tl))
 			return 1;
 		list = e;
 	}
@@ -464,6 +474,7 @@ static void process_request(client_connection_t *c)
 		
 		{
 			int code = res.code ? res.code : 200; /* if no code is provided we assume 200 */
+			int hdr_close = 0; /* handler sent Connection: close */
 			char buf[64]; /* "HTTP/x.x xxx code_desc[16]\r\nContent-Type: " = 45 */
 			const char *ct = res.content_type ? res.content_type : "text/html";
 			/* FIXME: for PAYLOAD_[TEMP]FILE the requst can still fail if the file cannot
@@ -500,14 +511,24 @@ static void process_request(client_connection_t *c)
 
 			if (res.headers) {
 				int hlen = strlen(res.headers);
+				const char *h = res.headers;
 				send_response(c, res.headers, hlen);
 				/* the headers have to be terminated - do so if need be */
 				if (hlen && res.headers[hlen - 1] != '\n')
 					send_response(c, "\r\n", 2);
+				/* the handler can request closing the connection with Connection: close */
+				while (h) {
+					if (lc_match(h, "connection:", 11) && has_token(h + 11, "close")) {
+						c->attr |= CONNECTION_CLOSE;
+						hdr_close = 1;
+					}
+					if ((h = strchr(h, '\n')))
+						h++;
+				}
 			}
 			/* tell HTTP/1.1 clients that we will close the connection (RFC 9112, 9.6),
 			   for HTTP/1.0 that is the default */
-			if ((c->attr & CONNECTION_CLOSE) && IS_HTTP_1_1(c))
+			if ((c->attr & CONNECTION_CLOSE) && IS_HTTP_1_1(c) && !hdr_close)
 				send_response(c, "Connection: close\r\n", 19);
 			/* 1xx, 204 and 304 responses can NOT have a body nor Content-Length
 			   (RFC 9110, 8.6 and RFC 9112, 6.3) - any payload is ignored */
