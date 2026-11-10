@@ -54,3 +54,7 @@
 
    o	fix compilation on Linux with gcc 15 (implicit declaration
 	of pthread_setname_np()).
+
+   o	Windows: fix a possible crash with threads > 0 where the
+	server loop checked for user interrupts while a processing
+	thread was evaluating R.

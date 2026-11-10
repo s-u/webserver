@@ -156,6 +156,11 @@ void async_queue_begin(async_queue *q) {
 	pthread_mutex_lock(&(q->mux));
 }
 
+/* like async_queue_begin(), but does not wait: returns 1 if the lock was acquired */
+int async_queue_try_begin(async_queue *q) {
+    return q ? !pthread_mutex_trylock(&(q->mux)) : 1;
+}
+
 void async_queue_end(async_queue *q) {
     if (q)
 	pthread_mutex_unlock(&(q->mux));

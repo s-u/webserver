@@ -384,6 +384,19 @@ void r_inline_fork_unlock(void) {
 	async_queue_end(r_queue);
 }
 
+/* For code on the main thread that must enter R while processing threads
+   may be evaluating R (e.g., checking for user interrupts). Does not wait:
+   returns 1 if R may be entered (then r_inline_unlock() must follow) or 0
+   if R is in use by another thread. */
+int r_inline_try_lock(void) {
+    return r_queue ? async_queue_try_begin(r_queue) : 1;
+}
+
+void r_inline_unlock(void) {
+    if (r_queue)
+	async_queue_end(r_queue);
+}
+
 /* called in the child right after fork() while the lock is held by the
    (only remaining) thread: the child is single-threaded, so it needs no lock. */
 void r_inline_fork_child(void) {

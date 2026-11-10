@@ -30,6 +30,10 @@ void r_inline_setup(int flags);
 void r_inline_thread_end();
 void r_inline_end();
 
+/* entering R from the main thread, see r_inline.c */
+int  r_inline_try_lock(void);
+void r_inline_unlock(void);
+
 /* fork support for r_ext workers, see r_inline.c */
 void r_inline_fork_lock(void);
 void r_inline_fork_unlock(void);

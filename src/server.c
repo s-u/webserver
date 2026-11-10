@@ -60,6 +60,7 @@ static int active_srv_sockets[MAX_SRVS];
 static int active = 1;
 #ifdef WIN32
 #include <Rinternals.h>
+#include "r_inline.h"
 
 static void check_interrupt(void *data) {
 	R_CheckUserInterrupt();
@@ -67,9 +68,16 @@ static void check_interrupt(void *data) {
 
 /* no signals on Windows: poll R for a pending user interrupt (Ctrl-C/Esc).
    R_CheckUserInterrupt() jumps out when interrupted, so catch that to be
-   able to shut down cleanly. Must be called on the main thread. */
+   able to shut down cleanly. Must be called on the main thread.
+   Processing threads may be evaluating R at the same time, so the check
+   is skipped while R is in use (it is repeated on the next iteration). */
 static int interrupt_pending(void) {
-	return !R_ToplevelExec(check_interrupt, 0);
+	int res;
+	if (!r_inline_try_lock())
+		return 0;
+	res = !R_ToplevelExec(check_interrupt, 0);
+	r_inline_unlock();
+	return res;
 }
 #endif
 

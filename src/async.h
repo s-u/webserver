@@ -45,6 +45,7 @@ int async_queue_set_process_threads(async_queue *q, int n);
    the calls are always matched and they MUST NOT nest.
    Experimental, for expert use only, use with care. */
 void async_queue_begin(async_queue *q);
+int  async_queue_try_begin(async_queue *q);
 void async_queue_end(async_queue *q);
 
 #endif
