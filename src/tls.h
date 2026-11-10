@@ -28,5 +28,9 @@ void close_tls(client_connection_t *c);
 /* returns non-zero if decrypted data can be read without waiting
    for the socket */
 int  tls_pending(client_connection_t *c);
+/* copies the common name of the verified client certificate of the
+   connection into buf (NUL-terminated), returns its length or -1 if
+   there is no such certificate (or the name is unsuitable) */
+int  tls_client_cn(client_connection_t *c, char *buf, size_t len);
 
 #endif

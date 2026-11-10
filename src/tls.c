@@ -49,31 +49,49 @@ static int cn_match(const char *pat, const char *cn, size_t len) {
     return (len == pl && !memcmp(cn, pat, pl));
 }
 
-/* checks the common name of the client certificate against the
-   allowed names, the certificate must have exactly one CN */
-static int client_cn_ok(tls_t *tls, X509 *cert) {
+/* the common name (UTF-8) of a certificate which must have exactly one CN
+   without embedded NULs (which could be used to fake a match). Returns its
+   length (the caller frees *cn with OPENSSL_free) or -1 with a reason in *why */
+static int get_cn(X509 *cert, unsigned char **cn, const char **why) {
     X509_NAME *sn = X509_get_subject_name(cert);
-    ASN1_STRING *d;
-    unsigned char *cn = 0;
-    int i, len, ok = 0;
+    int i, len;
+    *cn = 0;
     if (!sn || (i = X509_NAME_get_index_by_NID(sn, NID_commonName, -1)) < 0) {
-	ulog_info("TLS: client certificate has no common name, rejecting");
-	return 0;
+	*why = "has no common name";
+	return -1;
     }
     if (X509_NAME_get_index_by_NID(sn, NID_commonName, i) >= 0) {
-	ulog_info("TLS: client certificate has more than one common name, rejecting");
+	*why = "has more than one common name";
+	return -1;
+    }
+    if ((len = ASN1_STRING_to_UTF8(cn, X509_NAME_ENTRY_get_data(X509_NAME_get_entry(sn, i)))) < 0) {
+	*cn = 0;
+	*why = "has an invalid common name";
+	return -1;
+    }
+    if (strlen((const char*) *cn) != (size_t) len) {
+	OPENSSL_free(*cn);
+	*cn = 0;
+	*why = "has a common name with embedded NULs";
+	return -1;
+    }
+    return len;
+}
+
+/* checks the common name of the client certificate against the allowed names */
+static int client_cn_ok(tls_t *tls, X509 *cert) {
+    unsigned char *cn;
+    const char *why = 0;
+    int i, len, ok = 0;
+    if ((len = get_cn(cert, &cn, &why)) < 0) {
+	ulog_info("TLS: client certificate %s, rejecting", why);
 	return 0;
     }
-    d = X509_NAME_ENTRY_get_data(X509_NAME_get_entry(sn, i));
-    if ((len = ASN1_STRING_to_UTF8(&cn, d)) < 0)
-	return 0;
-    /* embedded NULs could be used to fake a match */
-    if (strlen((const char*) cn) == (size_t) len)
-	for (i = 0; i < tls->n_cn; i++)
-	    if (cn_match(tls->cn[i], (const char*) cn, len)) {
-		ok = 1;
-		break;
-	    }
+    for (i = 0; i < tls->n_cn; i++)
+	if (cn_match(tls->cn[i], (const char*) cn, len)) {
+	    ok = 1;
+	    break;
+	}
     if (!ok)
 	ulog_info("TLS: client certificate common name \"%s\" is not allowed, rejecting", cn);
     OPENSSL_free(cn);
@@ -272,6 +290,42 @@ int tls_pending(client_connection_t *c) {
     return (c->info.ssl && SSL_pending((SSL*) c->info.ssl) > 0);
 }
 
+int tls_client_cn(client_connection_t *c, char *buf, size_t len) {
+    SSL *ssl = (SSL*) c->info.ssl;
+    X509 *cert;
+    unsigned char *cn;
+    const char *why = 0;
+    int n, i;
+    if (!ssl)
+	return -1;
+    /* the certificate is only requested (and verified) if tls.client.ca is set */
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    cert = SSL_get1_peer_certificate(ssl);
+#else
+    cert = SSL_get_peer_certificate(ssl);
+#endif
+    if (!cert)
+	return -1;
+    n = (SSL_get_verify_result(ssl) == X509_V_OK) ? get_cn(cert, &cn, &why) : -1;
+    X509_free(cert);
+    if (n < 0)
+	return -1;
+    /* the name is passed in a header line, so control characters are not allowed */
+    for (i = 0; i < n; i++)
+	if (cn[i] < 0x20 || cn[i] == 0x7f)
+	    break;
+    if (i < n || (size_t) n >= len) {
+	ulog_info("TLS: client certificate common name %s, not passed to handlers",
+		  (i < n) ? "contains control characters" : "is too long");
+	n = -1;
+    } else {
+	memcpy(buf, cn, n);
+	buf[n] = 0;
+    }
+    OPENSSL_free(cn);
+    return n;
+}
+
 void close_tls(client_connection_t *c) {
     if (c->info.ssl) {
 	SSL *ssl = (SSL*) c->info.ssl;
@@ -297,5 +351,6 @@ void tls_server(server_t *srv) { }
 int  add_tls(client_connection_t *c, tls_t *tls) { return -1; }
 void close_tls(client_connection_t *c) { }
 int  tls_pending(client_connection_t *c) { return 0; }
+int  tls_client_cn(client_connection_t *c, char *buf, size_t len) { return -1; }
 
 #endif
