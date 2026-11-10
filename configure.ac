@@ -135,6 +135,18 @@ if test "x${want_tls}" != xno; then
       [AC_SEARCH_LIBS(SSL_CTX_load_verify_locations, [ssl openssl],
         [AC_SEARCH_LIBS(EVP_Digest, [crypto], [working_tls=yes])]
       )])
+   # we require the OpenSSL 1.1.0 API
+   if test "x${working_tls}" = xyes; then
+      AC_MSG_CHECKING([whether OpenSSL is at least 1.1.0])
+      AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <openssl/ssl.h>]],
+         [[SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+           SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+           SSL_CTX_free(ctx);]])],
+         [AC_MSG_RESULT(yes)],
+         [AC_MSG_RESULT(no)
+          AC_MSG_WARN([OpenSSL is too old, TLS support requires OpenSSL 1.1.0 or higher])
+          working_tls=no])
+   fi
 fi
 
 if test "x${want_tls}" = xauto; then
@@ -142,13 +154,13 @@ if test "x${want_tls}" = xauto; then
 fi
 
 if test "x${want_tls}${working_tls}" = xyesno; then
-   AC_MSG_ERROR([--enable-tls was specified, but no working OpenSSL library was found.
+   AC_MSG_ERROR([--enable-tls was specified, but no working OpenSSL library (1.1.0 or higher) was found.
 Install libssl-dev or equivalent.])
 fi
 
 AC_MSG_CHECKING([whether TLS/SSL support is enabled])
 AC_MSG_RESULT([${working_tls}])
-if test "x${working_tls}"; then
+if test "x${working_tls}" = xyes; then
    AC_DEFINE(HAVE_TLS, 1, [If defined TLS/SSL support is enabled.])
 fi
 
