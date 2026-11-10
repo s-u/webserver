@@ -1,0 +1,96 @@
+name: check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # the tarball is built once on Linux and checked everywhere, as on CRAN
+  # (a Windows checkout has no execute permissions, e.g. for configure)
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: s-u/R-actions/install@v2
+        with:
+          r-version: release
+      - name: Build
+        run: R CMD build .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tarball
+          path: webserver_*.tar.gz
+
+  check:
+    needs: build
+    name: ${{ matrix.os }} R ${{ matrix.r-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-2025, macos-15, macos-15-intel, ubuntu-24.04 ]
+        r-version: [ release, devel ]
+    defaults:
+      run:
+        shell: bash
+    env:
+      _R_CHECK_FORCE_SUGGESTS_: false
+      _R_CHECK_CRAN_INCOMING_: false
+      # the R library may not be writable, so dependencies and the package go here
+      R_LIBS: ${{ github.workspace }}/lib
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: s-u/R-actions/install@v2
+        with:
+          r-version: ${{ matrix.r-version }}
+          tools: base
+
+      - name: System dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev
+
+      - name: System dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: SILENT_INSTALL_R=1 Rscript -e 'source("https://mac.R-project.org/bin/install.R"); install.libs("openssl")'
+
+      # install@v2 does not set a CRAN mirror
+      - name: Suggested packages
+        run: |
+          mkdir lib
+          Rscript -e 'install.packages("jsonlite", "lib", repos="https://cloud.r-project.org")'
+
+      - name: Get tarball
+        id: build
+        uses: actions/download-artifact@v8
+        with:
+          name: tarball
+
+      - name: Check
+        run: R CMD check --no-manual webserver_*.tar.gz
+
+      - name: Show check logs
+        if: always()
+        run: |
+          for f in webserver.Rcheck/00install.out webserver.Rcheck/tests/*.Rout*; do
+            if [ -f "$f" ]; then echo "::group::$f"; cat "$f"; echo "::endgroup::"; fi
+          done
+
+      # the install and the test suite also run when the check failed
+      - name: Install
+        id: install
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: R CMD INSTALL -l lib webserver_*.tar.gz
+
+      - name: Test suite
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 20
+        run: Rscript tests/webserver/run.R --lib=lib
+
+      - name: Upload check directory
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: webserver-Rcheck-${{ matrix.os }}-${{ matrix.r-version }}
+          path: webserver.Rcheck
