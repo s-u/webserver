@@ -1,3 +1,8 @@
+/* for pthread_setname_np() */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "async.h"
 #include "ulog.h"
 

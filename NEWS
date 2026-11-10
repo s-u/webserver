@@ -51,3 +51,6 @@
 
    o	Windows: fix a possible crash when creating the internal
 	socket pair fails (bad format string in the error message).
+
+   o	fix compilation on Linux with gcc 15 (implicit declaration
+	of pthread_setname_np()).
