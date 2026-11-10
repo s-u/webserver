@@ -4079,6 +4079,38 @@ fi
 
 fi
 
+   # we require the OpenSSL 1.1.0 API
+   if test "x${working_tls}" = xyes; then
+      { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether OpenSSL is at least 1.1.0" >&5
+printf %s "checking whether OpenSSL is at least 1.1.0... " >&6; }
+      cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <openssl/ssl.h>
+int
+main (void)
+{
+SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+           SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+           SSL_CTX_free(ctx);
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"
+then :
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+printf "%s\n" "yes" >&6; }
+else case e in #(
+  e) { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+          { printf "%s\n" "$as_me:${as_lineno-$LINENO}: WARNING: OpenSSL is too old, TLS support requires OpenSSL 1.1.0 or higher" >&5
+printf "%s\n" "$as_me: WARNING: OpenSSL is too old, TLS support requires OpenSSL 1.1.0 or higher" >&2;}
+          working_tls=no ;;
+esac
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam \
+    conftest$ac_exeext conftest.$ac_ext
+   fi
 fi
 
 if test "x${want_tls}" = xauto; then
@@ -4086,7 +4118,7 @@ if test "x${want_tls}" = xauto; then
 fi
 
 if test "x${want_tls}${working_tls}" = xyesno; then
-   as_fn_error $? "--enable-tls was specified, but no working OpenSSL library was found.
+   as_fn_error $? "--enable-tls was specified, but no working OpenSSL library (1.1.0 or higher) was found.
 Install libssl-dev or equivalent." "$LINENO" 5
 fi
 
@@ -4094,7 +4126,7 @@ fi
 printf %s "checking whether TLS/SSL support is enabled... " >&6; }
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: ${working_tls}" >&5
 printf "%s\n" "${working_tls}" >&6; }
-if test "x${working_tls}"; then
+if test "x${working_tls}" = xyes; then
 
 printf "%s\n" "#define HAVE_TLS 1" >>confdefs.h
 
