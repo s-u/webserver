@@ -6,15 +6,16 @@
 SEXP C_add_handler(SEXP args);
 SEXP C_remove_all_handlers(void);
 SEXP C_parse_headers(SEXP sWhat);
-SEXP C_start(SEXP sPort, SEXP sSock, SEXP sThreads,
-             SEXP sFork, SEXP sIPv6, SEXP sLocal);
+SEXP C_start(SEXP sListen, SEXP sThreads, SEXP sFork);
+SEXP C_has_tls(void);
 /* r_util.c */
 SEXP C_fds2file(SEXP sFile, SEXP sWhich, SEXP sAppend,
                 SEXP sMode, SEXP sClose);
 
 static const R_CallMethodDef CallEntries[] = {
     {"C_remove_all_handlers", (DL_FUNC) &C_remove_all_handlers,  0},
-    {"C_start",               (DL_FUNC) &C_start,                6},
+    {"C_start",               (DL_FUNC) &C_start,                3},
+    {"C_has_tls",             (DL_FUNC) &C_has_tls,              0},
     {"C_parse_headers",       (DL_FUNC) &C_parse_headers,        1},
     {"C_fds2file",            (DL_FUNC) &C_fds2file,             5},
     {NULL, NULL, 0}

@@ -129,7 +129,9 @@ struct server {
 	void   *aux;          /* auxiliary data; if used, you may want to set fin above */
 };
 
-server_t *create_server(int port, const char *localSocketName, int localSocketMode, int flags);
+server_t *create_server(int port, const char *addr, const char *localSocketName, int localSocketMode, int flags);
+/* description of the error if create_server() failed */
+const char *server_last_error(void);
 int add_server(server_t *srv);
 int rm_server(server_t *srv);
 

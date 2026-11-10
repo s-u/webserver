@@ -4,6 +4,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <fcntl.h>
 
 #include "dalloc.h"
@@ -231,7 +232,43 @@ int server_get_info(server_t *srv, client_connection_info_t *info) {
 	return 0;
 }
 
-server_t *create_server(int port, const char *localSocketName, int localSocketMode, int flags) {
+/* message of the last error in create_server() */
+static char srv_err[256];
+
+const char *server_last_error(void) {
+	return srv_err;
+}
+
+/* sets the last error (and logs it) */
+static void srv_error(const char *format, ...) {
+	va_list ap;
+	va_start(ap, format);
+	vsnprintf(srv_err, sizeof(srv_err), format, ap);
+	va_end(ap);
+	ulog_error("%s", srv_err);
+}
+
+/* description of the last socket error (Winsock doesn't use errno) */
+static const char *sock_errstr(void) {
+#ifdef WIN32
+	static char buf[192];
+	int e = WSAGetLastError();
+	size_t n = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, 0, e, 0,
+							  buf, sizeof(buf), 0);
+	while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' || buf[n - 1] == ' ' || buf[n - 1] == '.'))
+		buf[--n] = 0;
+	if (!n)
+		snprintf(buf, sizeof(buf), "Winsock error %d", e);
+	return buf;
+#else
+	return strerror(errno);
+#endif
+}
+
+/* addr (optional) is the numeric address to bind to, otherwise SRV_LOCAL
+   decides between the loopback and all interfaces. On failure returns NULL
+   and server_last_error() describes the problem. */
+server_t *create_server(int port, const char *addr, const char *localSocketName, int localSocketMode, int flags) {
 	server_t *srv;
 	SAIN ssa;
 	int reuse, ss;
@@ -243,24 +280,27 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 	struct sockaddr_un lusa;
 #endif
 
-	DBG(ulog_debug(" - create_server(port = %d, socket = %s, mode = %d, flags = 0x%x)", port, localSocketName ? localSocketName : "<NULL>", localSocketMode, flags));
+	DBG(ulog_debug(" - create_server(port = %d, addr = %s, socket = %s, mode = %d, flags = 0x%x)", port, addr ? addr : "<NULL>", localSocketName ? localSocketName : "<NULL>", localSocketMode, flags));
 
+	srv_err[0] = 0;
 	initSock();
 
 	if (localSocketName) {
 #ifdef WIN32
-		ulog_error("Local sockets are not supported on non-unix systems.");
+		srv_error("local sockets are not supported on Windows");
 		return 0;
 #else
 		if ((ss = socket(AF_LOCAL, SOCK_STREAM, 0)) == -1) {
-			ulog_error("cannot create local socket: %s", strerror(errno));
+			srv_error("cannot create local socket: %s", sock_errstr());
 			return 0;
 		}
 
 		memset(&lusa, 0, sizeof(lusa));
 		lusa.sun_family = AF_LOCAL;
-		if (strlen(localSocketName) > sizeof(lusa.sun_path) - 2) {
-			ulog_error("ERROR: Local socket name is too long for this system.");
+		if (strlen(localSocketName) > sizeof(lusa.sun_path) - 1) {
+			srv_error("local socket name is too long for this system (at most %d bytes)",
+					  (int) sizeof(lusa.sun_path) - 1);
+			closesocket(ss);
 			return 0;
 		}
 		strcpy(lusa.sun_path, localSocketName);
@@ -269,7 +309,7 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 			struct stat st;
 			if (!lstat(localSocketName, &st)) {
 				if (!S_ISSOCK(st.st_mode)) {
-					ulog_error("ERROR: '%s' exists and is not a socket", localSocketName);
+					srv_error("'%s' exists and is not a socket", localSocketName);
 					closesocket(ss);
 					return 0;
 				}
@@ -285,7 +325,7 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 #endif
 
 	if (ss == INVALID_SOCKET) {
-		ulog_error("no available socket: %s", strerror(errno));
+		srv_error("cannot create socket: %s", sock_errstr());
 		return 0;
 	}
 
@@ -301,7 +341,8 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 
 	srv = (server_t*) calloc(1, sizeof(server_t));
 	if (!srv) {
-		ulog_error("cannot allocate memory for server structure");
+		srv_error("cannot allocate memory for server structure");
+		closesocket(ss);
 		return 0;
 	}
 
@@ -316,7 +357,9 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 #ifndef WIN32
 	if (localSocketName) {
 		if (bind(ss, (SA*) &lusa, sizeof(lusa))) {
-			ulog_error("unable to bind to %s: %s", lusa.sun_path, strerror(errno));
+			srv_error("unable to bind to %s: %s", lusa.sun_path, sock_errstr());
+			closesocket(ss);
+			free(srv);
 			return 0;
 		}
 		if (localSocketMode)
@@ -329,9 +372,17 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 			ssa6.sin6_family = AF_INET6;
 			ssa6.sin6_port = htons(port);
 			ssa6.sin6_addr = (flags & SRV_LOCAL) ? in6addr_loopback : in6addr_any;
-			if (bind(ss, (struct sockaddr*) &ssa6, sizeof(ssa6))) {
-				ulog_error("unable to bind to IPv6 port %d: %s", port, strerror(errno));
+			if (addr && inet_pton(AF_INET6, addr, &ssa6.sin6_addr) != 1) {
+				srv_error("invalid IPv6 address '%s'", addr);
 				closesocket(ss);
+				free(srv);
+				return 0;
+			}
+			if (bind(ss, (struct sockaddr*) &ssa6, sizeof(ssa6))) {
+				srv_error("unable to bind to IPv6 %s port %d: %s", addr ? addr : ((flags & SRV_LOCAL) ? "::1" : "::"),
+						  port, sock_errstr());
+				closesocket(ss);
+				free(srv);
 				return 0;
 			}
 		} else {
@@ -340,9 +391,17 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 			ssa.sin_family = AF_INET;
 			ssa.sin_port = htons(port);
 			ssa.sin_addr.s_addr = htonl((flags & SRV_LOCAL) ? INADDR_LOOPBACK : INADDR_ANY);
-			if (bind(ss, (struct sockaddr*) &ssa, sizeof(ssa))) {
-				ulog_error("unable to bind to IPv4 port %d: %s", port, strerror(errno));
+			if (addr && ((ssa.sin_addr.s_addr = inet_addr(addr)) == INADDR_NONE) && strcmp(addr, "255.255.255.255")) {
+				srv_error("invalid IPv4 address '%s'", addr);
 				closesocket(ss);
+				free(srv);
+				return 0;
+			}
+			if (bind(ss, (struct sockaddr*) &ssa, sizeof(ssa))) {
+				srv_error("unable to bind to %s port %d: %s", addr ? addr : ((flags & SRV_LOCAL) ? "127.0.0.1" : "0.0.0.0"),
+						  port, sock_errstr());
+				closesocket(ss);
+				free(srv);
 				return 0;
 			}
 #ifdef HAVE_IPV6
@@ -353,8 +412,9 @@ server_t *create_server(int port, const char *localSocketName, int localSocketMo
 #endif
     
 	if (listen(ss, LISTENQ)) {
-		ulog_error("listen failed: %s", strerror(errno));
+		srv_error("listen failed: %s", sock_errstr());
 		closesocket(ss);
+		free(srv);
 		return 0;
 	}
 

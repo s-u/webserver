@@ -83,6 +83,7 @@ struct aux_pass {
 #else
 	ws_connected_fn_t ws_connected;
 #endif
+	tls_t *tls; /* TLS context for HTTPS servers, NULL otherwise */
 };	
 
 struct client_connection {
@@ -273,18 +274,18 @@ static int send_response(client_connection_t *c, const char *buf, size_t len)
 /* sends HTTP/x.x plus the text (which should be of the form " XXX ...") */
 static int send_http_response(client_connection_t *c, const char *text) {
     char buf[96];
-	server_t *srv = c->info.srv;
     const char *s = HTTP_SIG(c);
-    int l = strlen(text), res;
+    int l = strlen(text);
     /* reduce the number of packets by sending the payload en-block from buf */
     if (l < sizeof(buf) - 10) {
 		strcpy(buf, s);
 		strcpy(buf + 8, text);
 		return send_response(c, buf, l + 8);
     }
-    res = srv->send(c, s, 8);
-    if (res < 8) return -1;
-    return send_response(c, text, strlen(text));
+    /* send_response() handles partial sends and retries (required by TLS) */
+    if (send_response(c, s, 8))
+	return -1;
+    return send_response(c, text, l);
 }
 
 /* decode URI in place (decoding never expands) */
@@ -1248,7 +1249,8 @@ static void http_input_iteration(client_connection_t *c) {
     if (!c) return;
     do
 	http_input_iteration_(c);
-    while (c->info.s != INVALID_SOCKET && c->pipelined);
+    /* TLS may have decrypted data that are no longer visible on the socket */
+    while (c->info.s != INVALID_SOCKET && (c->pipelined || tls_pending(c)));
 }
 
 #include "async.h"
@@ -1273,8 +1275,13 @@ static void HTTP_connected(client_connection_t *conn) {
 
 	conn->aux = (struct aux_pass*) conn->info.srv->aux;
 
-	if ((conn->info.srv->flags & SRV_TLS) && shared_tls(0))
-		add_tls(conn, shared_tls(0), 1);
+	if (conn->aux->tls && add_tls(conn, conn->aux->tls)) {
+		ulog_error("cannot set up TLS for the connection");
+		conn_finalize(conn);
+		end_pool();
+		free(conn);
+		return;
+	}
 
 	if ((conn->info.srv->flags & SRV_ASYNC_PROCESS)) {
 		DBG(ulog_debug("HTTP_connected: adding connection (%p) to queue", (void*) conn));
@@ -1336,8 +1343,16 @@ int http_request_set_url(http_request_t *req, const char *path, const char *quer
 }
 
 static void http_server_fin(server_t *srv) {
-	if (srv->aux)
+	if (srv->aux) {
+		free_tls(((struct aux_pass*) srv->aux)->tls);
 		free(srv->aux);
+	}
+}
+
+void http_server_set_tls(server_t *srv, tls_t *tls) {
+	((struct aux_pass*) srv->aux)->tls = tls;
+	srv->flags |= SRV_TLS;
+	tls_server(srv);
 }
 
 /* FIXME: this is a hack - handlers should have a way
@@ -1373,18 +1388,19 @@ int http_finish_threads() {
 }
 
 #ifdef NO_WEBSOCKETS
-server_t *create_HTTP_server(int port, const char *sock, int flags, http_handler_fn_t handler, void *ws_connected)
+server_t *create_HTTP_server(int port, const char *addr, const char *sock, int flags, http_handler_fn_t handler, void *ws_connected)
 #else
-server_t *create_HTTP_server(int port, const char *sock, int flags, http_handler_fn_t handler, ws_connected_fn_t ws_connected)
+server_t *create_HTTP_server(int port, const char *addr, const char *sock, int flags, http_handler_fn_t handler, ws_connected_fn_t ws_connected)
 #endif
 {
-	server_t *srv = create_server(port, sock, 0, flags);
+	server_t *srv = create_server(port, addr, sock, 0, flags);
 	DBG(ulog_debug("create_HTTP_server(port=%d, sock=%s, flags=0x%x)", port, sock ? sock : "<NONE>", flags));
 	if (srv) {
 		struct aux_pass *aux = (struct aux_pass*) malloc(sizeof(struct aux_pass));
 		if (!aux) return 0;  /* FIXME: release srv? */
 		aux->http_handler = handler;
 		aux->ws_connected = ws_connected;
+		aux->tls = 0;
 		srv->connected = HTTP_connected;
 		/* srv->send_resp = */
 		srv->recv      = server_recv;

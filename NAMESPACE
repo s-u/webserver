@@ -1,3 +1,3 @@
-useDynLib(webserver, C_start, C_add_handler, C_remove_all_handlers, C_parse_headers, C_fds2file)
-export(simple, webstart, addHandler, rmAllHandlers)
+useDynLib(webserver, C_start, C_has_tls, C_add_handler, C_remove_all_handlers, C_parse_headers, C_fds2file)
+export(simple, webstart, hasTLS, addHandler, rmAllHandlers)
 S3method(addHandler, character)

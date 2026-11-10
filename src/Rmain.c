@@ -130,35 +130,102 @@ SEXP C_parse_headers(SEXP sWhat) {
     return r_http_parse_headers((const char*)RAW(sWhat), (int) LENGTH(sWhat));
 }
 
-SEXP C_start(SEXP sPort, SEXP sSock, SEXP sThreads, SEXP sFork, SEXP sIPv6, SEXP sLocal) {
-    int http_port = asInteger(sPort), threads = asInteger(sThreads); /* tls_info = 0; */
-    int use_fork = asInteger(sFork), use_ip6 = asInteger(sIPv6) > 0, flags = 0;
-    int use_local = asInteger(sLocal);
-    int active_servers = 0;
-    const char *sock = 0;
-    const char *doc_root = "./";
+/* element of a named list or R_NilValue */
+static SEXP list_elt(SEXP list, const char *name) {
+    SEXP names = Rf_getAttrib(list, R_NamesSymbol);
+    int i, n = (TYPEOF(list) == VECSXP) ? LENGTH(list) : 0;
+    for (i = 0; i < n && TYPEOF(names) == STRSXP; i++)
+	if (!strcmp(CHAR(STRING_ELT(names, i)), name))
+	    return VECTOR_ELT(list, i);
+    return R_NilValue;
+}
 
-    if (!list_content_handlers(0, 0))
-	Rf_warning("No content handlers are registered, all responses will be 404.");
-
-    if (TYPEOF(sSock) == STRSXP && LENGTH(sSock) == 1)
-	sock = CHAR(STRING_ELT(sSock, 0));
-    else if (sSock != R_NilValue)
-	Rf_error("Invalid value for `socket', must be a string or NULL");
-
+/* file name or NULL if not set (NULL/NA); OpenSSL expects UTF-8 on Windows */
+static const char *file_elt(SEXP list, const char *name) {
+    SEXP s = list_elt(list, name);
+    if (TYPEOF(s) != STRSXP || LENGTH(s) < 1 || STRING_ELT(s, 0) == NA_STRING)
+	return 0;
 #ifdef WIN32
-    if (sock)
-	Rf_error("Local sockets are not supported by Windows");
+    return Rf_translateCharUTF8(STRING_ELT(s, 0));
+#else
+    return Rf_translateChar(STRING_ELT(s, 0));
 #endif
+}
 
-    begin_pool("Rmain");
+static const char *spec_elt(SEXP l) {
+    return CHAR(STRING_ELT(list_elt(l, "spec"), 0));
+}
 
-    ulog_set_app_name("Rwebserver");
+#define MAX_LISTENERS 64
 
+/* listen is a list of listeners as created by webstart(), each a list with
+   spec (string for messages), port, local, ipv6, socket (string or NULL)
+   and tls (NULL or a list with cert, key, ca, client.ca, client.cn) */
+SEXP C_start(SEXP sListen, SEXP sThreads, SEXP sFork) {
+    int threads = asInteger(sThreads), use_fork = asInteger(sFork), flags = 0;
+    int i, n, failed = -1;
+    server_t *srv[MAX_LISTENERS];
+    tls_t *tls[MAX_LISTENERS];
+    const char *sock[MAX_LISTENERS];
+    char err[512];
+
+    if (TYPEOF(sListen) != VECSXP || (n = LENGTH(sListen)) < 1)
+	Rf_error("there must be at least one listener");
+    if (n > MAX_LISTENERS)
+	Rf_error("too many listeners (at most %d are supported)", MAX_LISTENERS);
+
+    /* anything that can raise an R error must be done before resources
+       are allocated, servers are bound or threads started */
     if (use_fork && threads > 0) {
 	Rf_warning("fork=TRUE and threads > 0 are mutually exclusive, setting threads to 0");
 	threads = 0;
     }
+
+    for (i = 0; i < n; i++) {
+	SEXP l = VECTOR_ELT(sListen, i), sSock;
+	if (TYPEOF(list_elt(l, "spec")) != STRSXP || LENGTH(list_elt(l, "spec")) != 1)
+	    Rf_error("invalid listener specification");
+	sSock = list_elt(l, "socket");
+	sock[i] = (TYPEOF(sSock) == STRSXP && LENGTH(sSock) == 1) ?
+	    Rf_translateChar(STRING_ELT(sSock, 0)) : 0;
+#ifdef WIN32
+	if (sock[i])
+	    Rf_error("Local sockets are not supported by Windows");
+#endif
+#ifndef HAVE_IPV6
+	if (asLogical(list_elt(l, "ipv6")) == TRUE)
+	    Rf_error("IPv6 support is not enabled in this build, cannot listen on %s", spec_elt(l));
+#endif
+    }
+
+    if (!list_content_handlers(0, 0))
+	Rf_warning("No content handlers are registered, all responses will be 404.");
+
+    /* create TLS contexts first, so errors are reported before anything is started */
+    memset(srv, 0, sizeof(srv));
+    memset(tls, 0, sizeof(tls));
+    for (i = 0; i < n; i++) {
+	SEXP t = list_elt(VECTOR_ELT(sListen, i), "tls");
+	if (t != R_NilValue) {
+	    SEXP sCN = list_elt(t, "client.cn");
+	    int j, n_cn = (TYPEOF(sCN) == STRSXP) ? LENGTH(sCN) : 0;
+	    const char **cn = (const char**) R_alloc(n_cn + 1, sizeof(const char*));
+	    for (j = 0; j < n_cn; j++)
+		cn[j] = Rf_translateCharUTF8(STRING_ELT(sCN, j));
+	    err[0] = 0;
+	    tls[i] = new_tls(file_elt(t, "cert"), file_elt(t, "key"), file_elt(t, "ca"),
+			     file_elt(t, "client.ca"), cn, n_cn, err, sizeof(err));
+	    if (!tls[i]) {
+		for (j = 0; j < i; j++)
+		    free_tls(tls[j]);
+		Rf_error("TLS setup for %s failed: %s", spec_elt(VECTOR_ELT(sListen, i)), err);
+	    }
+	}
+    }
+
+    begin_pool("Rmain");
+
+    ulog_set_app_name("Rwebserver");
 
     r_inline_setup(threads > 0 ? RIF_ASYNC : 0);
 
@@ -166,42 +233,61 @@ SEXP C_start(SEXP sPort, SEXP sSock, SEXP sThreads, SEXP sFork, SEXP sIPv6, SEXP
 	flags |= SRV_FORK;
     if (threads > 0)
 	flags |= (SRV_ASYNC_PROCESS | SRV_NONBLOCK);
-    if (use_ip6)
-	flags |= SRV_IPV6;
-    if (use_local)
-	flags |= SRV_LOCAL;
     /* we do not allow SRV_ASYNC_ACCEPT just yet, but we could ... */
     DBG(flags |= SRV_LOG);
 
-    server_t *http_server = 0;
-    http_server = create_HTTP_server(http_port, sock, flags, http_request, 0);
-    if (http_server) {
-	if (!sock) {
+    for (i = 0; i < n; i++) {
+	SEXP l = VECTOR_ELT(sListen, i), sAddr = list_elt(l, "address");
+	const char *proto = tls[i] ? "HTTPS" : "HTTP";
+	int lflags = flags;
+	if (asLogical(list_elt(l, "ipv6")) == TRUE)
+	    lflags |= SRV_IPV6;
+	if (asLogical(list_elt(l, "local")) == TRUE)
+	    lflags |= SRV_LOCAL;
+	const char *addr = (TYPEOF(sAddr) == STRSXP && LENGTH(sAddr) == 1) ? CHAR(STRING_ELT(sAddr, 0)) : 0;
+	if (!(srv[i] = create_HTTP_server(asInteger(list_elt(l, "port")), addr, sock[i], lflags, http_request, 0))) {
+	    failed = i;
+	    break;
+	}
+	if (tls[i]) { /* the server owns the context from now on */
+	    http_server_set_tls(srv[i], tls[i]);
+	    tls[i] = 0;
+	}
+	if (!sock[i]) {
 	    client_connection_info_t info;
-	    if (!server_get_info(http_server, &info))
-		ulog_info("started HTTP server on %s port %d",
-			      (info.sa.ip4.sin_family == AF_INET) ? "IPv4" : "IPv6",
+	    if (!server_get_info(srv[i], &info))
+		ulog_info("started %s server on %s port %d", proto,
+			  (info.sa.ip4.sin_family == AF_INET) ? "IPv4" : "IPv6",
 			  (int) ntohs(info.sa.ip4.sin_port));
 	    else
-		ulog_info("started HTTP server on port %d", http_port);
+		ulog_info("started %s server on %s", proto, spec_elt(l));
 	} else
-	    ulog_info("started HTTP server on socket '%s'", sock);
-	active_servers++;
+	    ulog_info("started HTTP server on socket '%s'", sock[i]);
+    }
+
+    if (failed < 0) {
 	if (threads > 0)
 	    http_start_threads(threads);
-    } else
-	Rf_error("failed to start HTTP server on port %d", http_port);
-
-    if (!active_servers)
-	Rf_error("there are no active servers, aborting.");
-    ulog_info("starting server loop (http=%d, doc_root='%s')", http_port, doc_root);
-    serverLoop();
-    if (threads > 0)
-	http_finish_threads();
+	ulog_info("starting server loop");
+	serverLoop();
+    }
+    /* the processing threads may have been started by create_HTTP_server() */
+    http_finish_threads();
     r_inline_end();
-    rm_server(http_server);
-    free(http_server);
-    ulog_info("clean shutdown");
+    /* keep the reason, cleaning up may overwrite it */
+    if (failed >= 0) {
+	const char *e = server_last_error();
+	snprintf(err, sizeof(err), "%s", (e && *e) ? e : "unknown error");
+    }
+    for (i = 0; i < n; i++) {
+	if (srv[i]) {
+	    rm_server(srv[i]);
+	    free(srv[i]);
+	}
+	free_tls(tls[i]);
+    }
+    if (failed < 0)
+	ulog_info("clean shutdown");
 #ifdef ALLOC_REPORT
     report_pool();
 #endif
@@ -209,7 +295,17 @@ SEXP C_start(SEXP sPort, SEXP sSock, SEXP sThreads, SEXP sFork, SEXP sIPv6, SEXP
 #ifdef ALLOC_REPORT
     alloc_global_report();
 #endif
+    if (failed >= 0)
+	Rf_error("failed to start server on %s: %s", spec_elt(VECTOR_ELT(sListen, failed)), err);
     return R_NilValue;
+}
+
+SEXP C_has_tls(void) {
+#ifdef HAVE_TLS
+    return ScalarLogical(1);
+#else
+    return ScalarLogical(0);
+#endif
 }
 
 #endif
