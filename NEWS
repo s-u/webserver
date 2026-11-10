@@ -48,3 +48,6 @@
 
    o	fix compilation with the UCRT headers of Rtools 4.x
 	(redefinition of timespec_get()).
+
+   o	Windows: fix a possible crash when creating the internal
+	socket pair fails (bad format string in the error message).

@@ -27,7 +27,7 @@ int timespec_get(struct timespec *ts, int base) {
 
 static int X(const char *where, int res) {
     if (res)
-	ulog_error("%s failed: %s", strerror(errno));
+	ulog_error("%s failed: %d", where, WSAGetLastError());
     return res;
 }
 
