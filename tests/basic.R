@@ -6,6 +6,12 @@ library(webserver)
 ## argument checks (no server needed)
 stopifnot(inherits(try(addHandler("bogus", "/"), silent=TRUE), "try-error"))
 rmAllHandlers()
+stopifnot(is.logical(hasTLS()))
+## HTTPS is tested if supported, the client is curlGetHeaders() (without
+## verification since the certificate is not trusted)
+tls <- hasTLS() && capabilities("libcurl")
+certs <- normalizePath("tls", mustWork=FALSE)
+if (hasTLS() && !tls) cat("libcurl is not available, skipping the HTTPS test\n")
 
 dir <- tempfile("wstest")
 dir.create(file.path(dir, "root"), recursive=TRUE)
@@ -20,7 +26,9 @@ writeLines(c(
     'addHandler("rfun", "/echo", function(url, query, body, headers, method)',
     '    list(paste0("method=", method, ";query=", paste(names(query), query, sep="=", collapse="&"),',
     '                ";body=", if (length(body)) rawToChar(body) else ""), "text/plain"))',
-    'webstart(as.integer(args[1]), threads=2L)'), script)
+    'if (args[3] == "NA") webstart(as.integer(args[1]), threads=2L) else',
+    '    webstart(c(args[1], paste0("https://localhost:", args[3])), threads=2L,',
+    '             tls.cert=file.path(args[4], "server-chain.pem"), tls.key=file.path(args[4], "server.key"))'), script)
 
 ## minimal HTTP client (no proxies or libcurl involved)
 http <- function(port, req) {
@@ -62,7 +70,9 @@ if (is.na(port)) {
     for (i in 1:5) { # the port may have been taken in the meantime, so retry with another one
         if (i > 1 && is.na(port <- free.port())) break
         rscript <- file.path(R.home("bin"), "Rscript")
-        args <- c(shQuote(script), port, shQuote(file.path(dir, "root")))
+        tls.port <- if (tls) free.port() else NA
+        if (tls && (is.na(tls.port) || tls.port == port)) next
+        args <- c(shQuote(script), port, shQuote(file.path(dir, "root")), tls.port, shQuote(certs))
         ## on Windows system2() opens the log without sharing, so it could not be
         ## read while the server runs; a redirection by cmd allows that
         if (.Platform$OS.type == "windows")
@@ -93,6 +103,12 @@ if (is.na(port)) {
     stopifnot(r$status == 200, identical(r$body, "method=GET;query=a=1&b=x y;body="))
     r <- http(port, "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello")
     stopifnot(r$status == 200, identical(r$body, "method=POST;query=;body=hello"))
+    if (tls) {
+        Sys.setenv(no_proxy="*", NO_PROXY="*")
+        h <- curlGetHeaders(paste0("https://127.0.0.1:", tls.port, "/static/hello.txt"), verify=FALSE)
+        stopifnot(attr(h, "status") == 200)
+        cat("HTTPS OK\n")
+    }
     cat("all OK\n")
 }, finally={
     if (!is.na(pid)) tools::pskill(pid)

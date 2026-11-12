@@ -24,8 +24,8 @@ listed at the end.
 
 | Option | Default | Description |
 |---|---|---|
-| `--suites=<list>` | `spec,http,rqueue,rfork` | suites to run (comma-separated) |
-| `--modes=<list>` | `threads,single,rfunfork,connfork` | server modes for the `http` suite |
+| `--suites=<list>` | `spec,http,rqueue,rfork,tls` | suites to run (comma-separated) |
+| `--modes=<list>` | `threads,single,rfunfork,connfork` | server modes for the `http` suite (`tls` uses `threads`, `single` and `connfork`) |
 | `--threads=<n>` | `4` | processing threads of the servers; `rqueue` and `rfork` also run with 0 threads |
 | `--lib=<path>` | | load `webserver` from this library (in the driver and in the servers) |
 | `--slow` | off | include slow tests (e.g. waiting for the 30s send timeout) |
@@ -52,6 +52,7 @@ Rscript tests/webserver/run.R '^\[rqueue/4\]'
 | `http` | `test-http.R`, `test-conc.R` | `fixtures/server.R` | static files, R handlers, rewrites, HTTP protocol, malformed requests, concurrency; run once per mode |
 | `rqueue` | `test-rqueue.R` | `fixtures/rqueue.R` | R handlers evaluated in the server's R session: serialization, errors, C stack, shutdown |
 | `rfork` | `test-rfork.R` | `fixtures/rfork.R` | R handlers evaluated in forked workers: worker life cycle, payloads, shutdown |
+| `tls` | `test-tls.R` | `fixtures/tls.R` | HTTPS next to HTTP: certificate chains, client certificates, pipelining and large transfers over TLS, robustness; run once per mode |
 
 Server modes of the `http` suite:
 
@@ -62,6 +63,12 @@ Server modes of the `http` suite:
 
 `rfunfork`, `connfork` and the `rfork` suite need `fork()` and are skipped on
 Windows. The `rfork` suite also uses `ps` to inspect the worker processes.
+
+The `tls` suite needs webserver built with TLS support and uses the `openssl`
+command line tool as the client (the `OPENSSL` environment variable can point
+to it, otherwise it is looked up on the `PATH`), it is skipped otherwise. The
+certificates and keys it uses are in `tests/tls`, `make-certs.sh` there
+re-creates them.
 
 ## Writing tests
 

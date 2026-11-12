@@ -87,6 +87,31 @@ test("rfun: other methods", for (m in c("PUT", "DELETE", "PATCH", "OPTIONS")) {
 test("rfun: request headers visible", {
     r <- get("/hdr", headers=list("X-Foo"="bar", "User-Agent"="tester")); low <- gsub("[._]", "-", tolower(r$text))
     expect(has(low, "x-foo: bar") && has(low, "user-agent: tester"), r$text) })
+## /parsed decodes the body with defaultBodyParsers() plus "text/*" (upper case)
+post.parsed <- function(ct, body) request("POST", "/parsed", headers=list("Content-Type"=ct), body=body)
+test("rfun: parse.body form", {
+    r <- post.parsed("application/x-www-form-urlencoded", "a=1&b=x+y%21")
+    expect(r$status == 200 && identical(r$text, 'character:c(a = "1", b = "x y!")'), r) })
+test("rfun: parse.body JSON", skip=if (!requireNamespace("jsonlite", quietly=TRUE)) "jsonlite not installed", {
+    r <- post.parsed("application/json; charset=utf-8", '{"a":1,"b":[1,2]}')
+    expect(r$status == 200 && identical(r$text, "list:list(a = 1L, b = 1:2)"), r) })
+test("rfun: parse.body malformed JSON -> 400", skip=if (!requireNamespace("jsonlite", quietly=TRUE)) "jsonlite not installed", {
+    r <- post.parsed("application/json", '{"a":'); expect(r$status == 400, r); healthy() })
+test("rfun: parse.body custom parser by prefix", {
+    r <- post.parsed("Text/Plain", "abc"); expect(r$status == 200 && identical(r$text, 'character:"ABC"'), r) })
+test("rfun: parse.body unmatched type passed raw", {
+    r <- post.parsed("application/octet-stream", "abc"); expect(r$status == 200 && startsWith(r$text, "raw:"), r) })
+## the request headers as "name: value" lines (/hdr reflects them)
+hdr.lines <- function(r) strsplit(r$text, "\n", fixed=TRUE)[[1L]]
+test("rfun: Request-Method and Request-Proto set by the server", {
+    r <- get("/hdr"); l <- grep("^request[.]", hdr.lines(r), value=TRUE)
+    expect(identical(l, c("request.method: GET", "request.proto: http")), r$text) })
+test("rfun: Request-* headers sent by the client are dropped", {
+    r <- get("/hdr", headers=list("Request-Method"="FAKE", "request-proto"="https",
+                                  "REQUEST-Client-CN"="admin", "Request-Other"="x", "X-Request-Id"="7"))
+    l <- hdr.lines(r)
+    expect(identical(grep("^request[.]", l, value=TRUE), c("request.method: GET", "request.proto: http")), r$text)
+    expect("x.request.id: 7" %in% l, r$text) })
 test("rfun: custom response headers", {
     r <- get("/custom-headers"); expect(r$status == 200, r)
     expect(identical(r$headers[["x-test"]], "1") && identical(r$headers[["x-other"]], "two"), r) })
@@ -301,6 +326,10 @@ test("headers > 1KB are all delivered", {
     h <- setNames(as.list(rep(strrep("v", 100), 40)), paste0("X-H", 0:39))
     r <- get("/hdr", headers=h); low <- gsub("[._]", "-", tolower(r$text)); expect(r$status == 200, r)
     expect(has(low, paste0("x-h39: ", strrep("v", 100))) && has(low, "x-h0: "), substr(r$text, 1, 200)) })
+test("bad: folded header line -> 400", {
+    for (h in c("X-A: 1\r\n folded", " X-A: 1", "X-A: 1\r\n\tRequest-Client-CN: admin"))
+        expect(rawreq(paste0("GET /echo HTTP/1.1\r\nHost: x\r\n", h, "\r\nConnection: close\r\n\r\n"))$status == 400, h)
+    healthy() })
 test("bad: header without colon", { expect.in(rawreq("GET /echo HTTP/1.1\r\nHost: x\r\nNoColonHere\r\nConnection: close\r\n\r\n")$status, c(200, 400)); healthy() })
 test("bad: overlong method", { expect.in(rawreq("VERYLONGMETHODNAME /echo HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")$status, c(200, 400, 501)); healthy() })
 test("bad: GET with body", { expect.in(request("GET", "/echo", body="abc")$status, c(200, 400)); healthy() })

@@ -72,7 +72,13 @@ handler <- function(url, query, body, headers, method) {
 ## rewrites must come first
 webserver::addHandler("rewrite", "/rw/?/?", "/echo?a=$1&b=$2")
 webserver::addHandler("rewrite", "/rwf/", "/static/?k=v")
-webserver::addHandler("static", "/static/", path=paste0(docroot, "/"), index="index.html", stop=FALSE)
+webserver::addHandler("static", "/static/", path=docroot, index="index.html", stop=FALSE)
+## reflects the (decoded) body: <class>:<deparsed value>
+webserver::addHandler("rfun", "/parsed", function(url, query, body, ...)
+    list(paste0(class(body)[1L], ":", paste(deparse(body), collapse="")), "text/plain"),
+    parse.body=c(webserver::defaultBodyParsers(),
+                 list("text/*"=function(body, content.type) toupper(rawToChar(body)))),
+    fork=fork)
 webserver::addHandler("rfun", "/", handler, fork=fork)
 cat("READY\n", file=stderr())
 flush(stderr())

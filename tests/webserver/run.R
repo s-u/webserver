@@ -2,9 +2,10 @@
 ## nothing is built or installed. Requires permission to bind local TCP ports.
 ##
 ## Usage: Rscript run.R [options] [pattern]
-##   --suites=spec,http,rqueue,rfork   suites to run (default: all)
+##   --suites=spec,http,rqueue,rfork,tls   suites to run (default: all)
 ##   --modes=threads,single,rfunfork,connfork
-##                    server modes for the http suite (default: all)
+##                    server modes for the http suite (default: all), the
+##                    tls suite uses threads, single and connfork
 ##   --threads=<n>    processing threads of the servers (default: 4),
 ##                    the rqueue and rfork suites also run with 0 threads
 ##   --lib=<path>     load webserver from this library (also in the servers)
@@ -22,7 +23,7 @@ split.opt <- function(x) strsplit(x, ",", fixed=TRUE)[[1]]
 known <- c("suites", "modes", "threads", "lib", "slow")
 bad <- setdiff(sub("^--([^=]*).*", "\\1", grep("^--", args, value=TRUE)), known)
 if (length(bad)) stop("unknown option(s): ", paste0("--", bad, collapse=", "))
-SUITES  <- split.opt(opt("suites", "spec,http,rqueue,rfork"))
+SUITES  <- split.opt(opt("suites", "spec,http,rqueue,rfork,tls"))
 MODES   <- split.opt(opt("modes", "threads,single,rfunfork,connfork"))
 THREADS.OPT <- as.integer(opt("threads", 4L))
 LIB     <- opt("lib")
@@ -82,6 +83,11 @@ run.suite <- function(label, files, fixture=NULL, args=character(), skip=NULL, v
 }
 
 no.fork <- if (WIN) "needs fork(), not available on Windows"
+## the TLS tests use the test certificates in ../tls and the openssl tool as the client
+CERTS <- normalizePath(file.path(HERE, "..", "tls"), mustWork=FALSE)
+OPENSSL <- Sys.getenv("OPENSSL", Sys.which("openssl"))
+no.tls <- if (!hasTLS()) "webserver was built without TLS support" else
+          if (!nzchar(OPENSSL)) "the openssl tool was not found (set OPENSSL)"
 DOCROOT <- make.docroot()
 tryCatch({
     if ("spec" %in% SUITES)
@@ -98,6 +104,13 @@ tryCatch({
             run.suite(paste0(suite, "/", threads), paste0("test-", suite, ".R"), paste0(suite, ".R"),
                       paste0("--threads=", threads), skip=if (suite == "rfork") no.fork,
                       vars=list(THREADS=threads))
+    if ("tls" %in% SUITES) for (mode in intersect(MODES, c("threads", "single", "connfork"))) {
+        threads <- if (mode == "single") 0L else THREADS.OPT
+        run.suite(paste0("tls/", mode), "test-tls.R", "tls.R",
+                  c(paste0("--mode=", mode), paste0("--threads=", threads), paste0("--certs=", shQuote(CERTS))),
+                  skip=if (!is.null(no.tls)) no.tls else if (mode == "connfork") no.fork,
+                  vars=list(MODE=mode, THREADS=threads))
+    }
 }, finally={
     kill.server()
     unlink(dirname(DOCROOT), recursive=TRUE)
