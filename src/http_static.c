@@ -37,6 +37,32 @@ void http_static_free(http_static *hs) {
     free(hs);
 }
 
+/* Location: header for the redirect to path + "/". The path has been
+   decoded, so it has to be encoded again (this also prevents CR/LF from
+   reaching the header). Returns a malloc()ed string or NULL. */
+static char *slash_location(const char *path) {
+    static const char *hex = "0123456789ABCDEF";
+    const unsigned char *s = (const unsigned char*) path;
+    char *h = (char*) malloc(strlen(path) * 3 + 16), *d;
+    if (!h)
+	return 0;
+    strcpy(h, "Location: ");
+    d = h + 10;
+    while (*s) {
+	if ((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') ||
+	    (*s >= '0' && *s <= '9') || strchr("/-._~!$&'()*+,;=:@", *s))
+	    *(d++) = (char) *s;
+	else {
+	    *(d++) = '%';
+	    *(d++) = hex[*s >> 4];
+	    *(d++) = hex[*s & 15];
+	}
+	s++;
+    }
+    strcpy(d, "/\r\n");
+    return h;
+}
+
 http_static *http_static_entry(const char *prefix, const char *path,
 			       const char *index, int flags) {
     http_static *hs;
@@ -114,9 +140,8 @@ int http_static_handler(http_request_t *req, http_result_t *res, void *user) {
 		if (!stat(http_tmp, &st)) {
 		    found = 1;
 		    if (!slash) { /* relative links in the index only work with a trailing slash, so redirect */
-			snprintf(http_tmp, sizeof(http_tmp), "Location: %s/\r\n", path);
-			res->headers = strdup(http_tmp);
-			res->code = 301;
+			res->headers = slash_location(path);
+			res->code = res->headers ? 301 : 500;
 			end_pool();
 			return 1;
 		    }
