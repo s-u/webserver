@@ -2,16 +2,21 @@
 \alias{handlers}
 \alias{addHandler}
 \alias{rmAllHandlers}
+\alias{defaultBodyParsers}
 \title{Webserver Content Handlers}
 \description{
   \code{addHandler} adds a content handler to be used with the
   webserver.
 
   \code{rmAllHandlers} removes all currently registered handlers.
+
+  \code{defaultBodyParsers} returns the request body parsers used by R
+  function handlers with \code{parse.body=TRUE}.
 }
 \usage{
 addHandler(type, prefix, ...)
 rmAllHandlers()
+defaultBodyParsers()
 }
 \arguments{
 \item{type}{handler type}
@@ -36,6 +41,11 @@ request path according to specified rules.
 Syntax: \code{addHandler("static", prefix, path, index=NULL,
   stop=FALSE, gzip=FALSE)}
 
+\code{path} must be an existing directory. It is expanded (see
+\code{\link{path.expand}}) and converted to an absolute path when the
+handler is added (on unix symbolic links are
+resolved), so later changes of the working directory have no effect.
+
 When the \code{prefix} is matched, it is removed from the request path
 and the remaining path is appended to \code{path} to look up
 files. If the target matches a directory and \code{index} is a string,
@@ -56,8 +66,9 @@ bandwidth for compressible static content.
 Example:
 \code{addHandler("static", "/", path=".", index="index.html", stop=TRUE)}
 
-Serves files from the current directory at the root of URLs. It will
-stop and not evaluate any furhter handlers even if the file is not
+Serves files from the current directory (at the time of the call) at
+the root of URLs. It will
+stop and not evaluate any further handlers even if the file is not
 found.
 }
 \section{R Function Handler}{
@@ -65,7 +76,7 @@ found.
   server and Rserve.
 
   \code{addHandler("rfun", prefix, FUN, parse.query=TRUE,
-    parse.headers=TRUE, fork=FALSE)}
+    parse.headers=TRUE, parse.body=FALSE, fork=FALSE)}
 
   \describe{
     \item{FUN}{function to call for a request (see below for details)}
@@ -74,9 +85,12 @@ found.
       string (see below)}
     \item{parse.headers}{logical, if \code{TRUE} then the headers are
       parsed (see below), otherwise just a raw vector}
+    \item{parse.body}{\code{FALSE} to pass the request body as-is,
+      \code{TRUE} to decode it with the parsers returned by
+      \code{defaultBodyParsers()} or a named list of parsers (see below)}
     \item{fork}{logical, if \code{TRUE} then the R processing will be
       delegated to forked workers, one per each I/O thread (not
-      available on Widnows). Otherwise the R code is evaluated in the
+      available on Windows). Otherwise the R code is evaluated in the
       current session.}
   }
 
@@ -92,18 +106,34 @@ found.
       \code{"a=1&b=foo"} will be parsed into the R object
       \code{c(a="1", b="foo")}. Otherwise it is just the string itself.}
     \item{body}{body part of the request or \code{NULL} if there is no
-      body. If \code{parse.body=TRUE} then an attempt is made to decode
-      known body types such as multipart messages (file
-      uploads) and JSON. Otherwise it is a raw vector.}
+      body. Unless it is decoded by a parser (see \code{parse.body}
+      below), it is a raw vector with the \code{"content-type"}
+      attribute (if specified by the client).}
     \item{headers}{request headers. It is a raw vector unless
       \code{parse.headers=TRUE} in which case the headers are parsed
       into a named list where the header names are lowercase and the
       \code{"-"} character is replaced by \code{"."} so, for example,
       \code{User-Agent} is stored in the \code{user.agent} element of
       the list. Note that the parsing is experimental, since the
-      interpretation can vary among header entries. Note that at the
-      very least the \code{request.method} entry is always present and
-      contains the request method name (\code{GET}, \code{POST}, etc.).}
+      interpretation can vary among header entries.
+
+      The server adds the following headers which are always present
+      unless stated otherwise: \code{Request-Method} (\code{request.method}
+      when parsed) is the request method name (\code{GET}, \code{POST},
+      etc.), \code{Request-Proto} (\code{request.proto}) is \code{http} or
+      \code{https}, depending on the listener the request was received
+      on, and \code{Request-Client-CN} (\code{request.client.cn}) is
+      the common name of the client certificate. The latter is only
+      present if the client has presented a valid certificate, i.e.,
+      on HTTPS listeners with \code{tls.client.ca} set (see
+      \code{\link{webstart}}), and the certificate has a common name
+      that can be passed in a header (without control characters and
+      not excessively long), so handlers can use it to identify the
+      client. Header names starting with \code{Request-} are reserved for
+      the server, so such headers sent by the client are dropped.
+      Behind a reverse proxy, these describe the connection from the proxy,
+      the proxy may pass the original protocol on in another header
+      such as \code{X-Forwarded-Proto}.}
     \item{...}{reserved for future extensions}
   }
 
@@ -143,6 +173,30 @@ found.
   Example: \code{addHandler("rfun", "/api/v1/add",
     function(path, query, ...)
       list(as.numeric(query["a"]) + as.numeric(query["b"])))}
+
+  \bold{Body parsers.} A parser is a function \code{function(body,
+  content.type)} which receives the request body (raw vector) and the
+  value of the \code{Content-Type} header (including parameters such as
+  \code{charset}) and returns the decoded body which is then passed to
+  \code{FUN}. The names of the list of parsers are media types (matched
+  case-insensitively, parameters are ignored). A name can also start
+  with \code{*} to match any media type ending with the rest (e.g.,
+  \code{"*+json"}) or end with \code{*} to match any media type starting
+  with the rest (e.g., \code{"text/*"}). An exact match takes precedence,
+  otherwise the first matching name is used. If no parser matches, the
+  body is passed as-is. If the parser fails, the request is answered
+  with 400 Bad Request and \code{FUN} is not called.
+
+  \code{defaultBodyParsers()} returns a parser for URL encoded forms
+  (\code{application/x-www-form-urlencoded}) which produces a named
+  character vector like the parsed query and, if the \pkg{jsonlite}
+  package is installed, parsers for JSON (\code{application/json} and
+  \code{*+json}) using \code{jsonlite::fromJSON()}. The list can be
+  modified or extended to define the parsers of a handler, e.g.,
+
+  \code{addHandler("rfun", "/api", FUN, parse.body=c(defaultBodyParsers(),
+    list("text/csv"=function(body, content.type)
+      read.csv(text=rawToChar(body)))))}
 }
 \section{Rewrite Handler}{
   This handler modifies the request based on simple substitution rules.
@@ -151,7 +205,7 @@ found.
 
   The \code{prefix} can contain the \code{?} character as a wildcard
   which will match any number of characters other than \code{/}. The
-  matched content is then avaiable in the form of \code{$n} variables in
+  matched content is then available in the form of \code{$n} variables in
   the \code{replacement} where \code{n} is one of the integers 1..9.
   If the request prefix is matched then it is replaced by the
   \code{replacement}.
