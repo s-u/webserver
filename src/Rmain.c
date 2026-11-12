@@ -70,7 +70,8 @@ SEXP C_add_handler(SEXP args) {
 	    sIndex = CAR(args); args = CDR(args);
 	} else
 	    sIndex = findArg(args, "index", R_NilValue);
-	if (sIndex != R_NilValue && (!isString(sPath) || LENGTH(sPath) != 1))
+	if (sIndex != R_NilValue && (!isString(sIndex) || LENGTH(sIndex) != 1 ||
+				     STRING_ELT(sIndex, 0) == NA_STRING))
 	    Rf_error("index must be a string or NULL");
 	SEXP sGZ = findArg(args, "gzip", 0);
 	int do_gzip = sGZ ? Rf_asInteger(sGZ) : 0;
