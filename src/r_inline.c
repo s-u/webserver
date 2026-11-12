@@ -367,9 +367,7 @@ static __thread unsigned int worker_serial;
 /* set in the worker, which evaluates the handlers in-process */
 static int in_worker;
 
-void r_inline_thread_end();
-
-void r_inline_end() {
+void r_inline_end(void) {
     /* the main thread has a worker if R handlers with fork=TRUE were
        used without processing threads */
     r_inline_thread_end();
@@ -417,7 +415,7 @@ void r_inline_fork_child(void) {
     }
 }
 
-void r_inline_thread_end() {
+void r_inline_thread_end(void) {
     if (worker) {
 	DBG(ulog_debug("r_inline_end: disposing of workers"));
 	if (r_ext_ready(worker))

@@ -74,4 +74,7 @@ int pipe(SOCKET fds[2]) {
     return 0;
 }
 
+#else
+/* ISO C does not allow an empty translation unit */
+typedef int win32_c_unused;
 #endif

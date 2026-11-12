@@ -27,8 +27,8 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user);
 void r_inline_process(http_request_t *req, http_result_t *res, SEXP sFun, int flags);
 
 void r_inline_setup(int flags);
-void r_inline_thread_end();
-void r_inline_end();
+void r_inline_thread_end(void);
+void r_inline_end(void);
 
 /* entering R from the main thread, see r_inline.c */
 int  r_inline_try_lock(void);

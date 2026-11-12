@@ -45,8 +45,8 @@ int prefix_len[8] = { 9, 5, 8, 5, 7, 4, 4, 5 };
 /* this is a hack - server.h already solves the Win32 socket compatibility */
 #include "server.h"
 /* fake, but we don't care */
-static int getuid() { return 0; }
-static int getgid() { return 0; }
+static int getuid(void) { return 0; }
+static int getgid(void) { return 0; }
 #else
 #include <sys/socket.h>
 #include <sys/un.h>

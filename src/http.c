@@ -1410,10 +1410,10 @@ int http_start_threads(int n) {
 	return async_queue_set_process_threads(http_queue, n);
 }
 
-int http_finish_threads() {
+int http_finish_threads(void) {
 	int res = 0;
 	if (http_queue) {
-		int res = async_queue_finish(http_queue);
+		res = async_queue_finish(http_queue);
 		if (!res) { /* on success release the queue */
 			async_queue_free(http_queue);
 			http_queue = 0;

@@ -122,7 +122,7 @@ SEXP C_add_handler(SEXP args) {
     return ScalarLogical(1);
 }
 
-SEXP C_remove_all_handlers() {
+SEXP C_remove_all_handlers(void) {
     free_content_handlers();
     return ScalarLogical(1);
 }

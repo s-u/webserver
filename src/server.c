@@ -30,7 +30,7 @@ struct client_connection {
 typedef int socklen_t;
 static WSADATA wsaData;
 int sock_init_done;
-static int initSock() {
+static int initSock(void) {
 	if (sock_init_done)
 		return 0;
 	if (WSAStartup(0x200, &wsaData) && WSAStartup(0x101, &wsaData))
