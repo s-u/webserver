@@ -131,6 +131,19 @@ SEXP C_parse_headers(SEXP sWhat) {
     return r_http_parse_headers((const char*)RAW(sWhat), (int) LENGTH(sWhat));
 }
 
+/* parses a URL encoded form (raw vector) into a named character vector */
+SEXP C_parse_query(SEXP sWhat) {
+    char *buf;
+    if (TYPEOF(sWhat) != RAWSXP)
+	Rf_error("invalid form body");
+    if (memchr(RAW(sWhat), 0, XLENGTH(sWhat)))
+	Rf_error("form body contains NUL bytes");
+    buf = R_alloc(XLENGTH(sWhat) + 1, 1);
+    memcpy(buf, RAW(sWhat), XLENGTH(sWhat));
+    buf[XLENGTH(sWhat)] = 0;
+    return r_http_parse_query(buf);
+}
+
 /* element of a named list or R_NilValue */
 static SEXP list_elt(SEXP list, const char *name) {
     SEXP names = Rf_getAttrib(list, R_NamesSymbol);

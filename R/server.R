@@ -4,8 +4,67 @@ addHandler <- function(type, prefix, ...)
 addHandler.character <- function(type, prefix, ...)
     invisible(if (identical(type, "static"))
                   add.static.handler(prefix, ...)
+              else if (identical(type, "rfun"))
+                  add.rfun.handler(prefix, ...)
               else
                   .External(C_add_handler, type, prefix, ...))
+
+## parse.body: FALSE (raw body), TRUE (defaultBodyParsers()) or a named list
+## of parsers function(body, content.type) keyed by media type
+add.rfun.handler <- function(prefix, FUN, ..., parse.body=FALSE) {
+    if (!identical(parse.body, FALSE)) {
+        parsers <- if (isTRUE(parse.body)) defaultBodyParsers() else parse.body
+        if (!is.list(parsers) || (length(parsers) &&
+            (is.null(names(parsers)) || !all(nzchar(names(parsers))) ||
+             !all(vapply(parsers, is.function, TRUE)))))
+            stop("parse.body must be TRUE, FALSE or a named list of functions")
+        FUN <- body.parsing.handler(FUN, parsers)
+    }
+    .External(C_add_handler, "rfun", prefix, FUN, ...)
+}
+
+defaultBodyParsers <- function() {
+    p <- list("application/x-www-form-urlencoded" = function(body, content.type)
+        .Call(C_parse_query, body))
+    if (requireNamespace("jsonlite", quietly=TRUE))
+        p[["application/json"]] <- p[["*+json"]] <- function(body, content.type)
+            jsonlite::fromJSON(rawToChar(body), simplifyDataFrame=FALSE, simplifyMatrix=FALSE)
+    p
+}
+
+## parser for the content type ct: the exact media type first, then the
+## names with * at the beginning or end in their order
+find.body.parser <- function(parsers, ct) {
+    mt <- tolower(trimws(sub(";.*", "", ct)))
+    p <- parsers[[mt]]
+    if (is.null(p)) {
+        pat <- grep("^\\*|\\*$", names(parsers), value=TRUE)
+        ok <- ifelse(startsWith(pat, "*"), endsWith(mt, substring(pat, 2L)),
+                     startsWith(mt, substr(pat, 1L, nchar(pat) - 1L)))
+        if (any(ok))
+            p <- parsers[[pat[ok][1L]]]
+    }
+    p
+}
+
+## wraps FUN such that the body is decoded first, failures result in 400
+body.parsing.handler <- function(FUN, parsers) {
+    force(FUN) # the caller re-assigns FUN to this wrapper
+    names(parsers) <- tolower(names(parsers))
+    function(path, query, body, headers, ...) {
+        if (length(body) && length(ct <- attr(body, "content-type")) &&
+            !is.null(p <- find.body.parser(parsers, ct)))
+            body <- tryCatch(p(body, ct), error=function(e) e)
+        if (inherits(body, "error"))
+            list(paste0("cannot parse the request body: ", conditionMessage(body), "\n"),
+                 "text/plain", character(), 400L)
+        else {
+            ## FUN can also be the name of a function (looked up at request time)
+            fn <- if (is.name(FUN)) get(as.character(FUN), envir=.GlobalEnv, mode="function") else FUN
+            fn(path, query, body, headers, ...)
+        }
+    }
+}
 
 ## the static handler appends the rest of the URL path to its path, so it
 ## must end with a slash and be absolute (the working directory may change)
