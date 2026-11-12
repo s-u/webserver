@@ -6,9 +6,9 @@ AC_CONFIG_AUX_DIR([tools])
 AC_CONFIG_MACRO_DIRS([tools/m4])
 
 AC_ARG_ENABLE([ipv6],
-[AS_HELP_STRING([--enable-ipv6],[enable the use of IPv6 protocol. @<:@no@:>@])],
+[AS_HELP_STRING([--enable-ipv6],[enable the use of IPv6 protocol. (default is @<:@auto@:>@ which means enabled if IPv6 sockets are available)])],
 [want_ipv6="${enableval}"],
-[want_ipv6=no])
+[want_ipv6=auto])
 
 AC_ARG_ENABLE([tls],
 [AS_HELP_STRING([--enable-tls],[enable the use of secure sockets using TLS/SSL. (default is @<:@auto@:>@ which means enabled is OpenSSL is present)])],
@@ -80,23 +80,27 @@ fi
 # IPv6
 have_ipv6=no
 AC_MSG_CHECKING([whether to enable IPv6])
-if test "$want_ipv6" = yes; then
-AC_MSG_RESULT([yes])
+if test "$want_ipv6" != no; then
+AC_MSG_RESULT([$want_ipv6])
 AC_MSG_CHECKING([for working IPv6 sockets])
 AC_LINK_IFELSE([AC_LANG_SOURCE([
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 int main(void) {
     struct sockaddr_in6 sin;
     int i = socket(PF_INET6, SOCK_STREAM, 0);
     sin.sin6_family = AF_INET6;
     sin.sin6_addr = in6addr_any;
-    return 0;
+    return inet_pton(AF_INET6, "::1", &sin.sin6_addr) == 1 ? 0 : i;
 }
 ])],[AC_MSG_RESULT(yes)
 have_ipv6=yes],[AC_MSG_RESULT(no)])
 else
 AC_MSG_RESULT([no])
+fi
+if test "x${want_ipv6}${have_ipv6}" = xyesno; then
+   AC_MSG_ERROR([IPv6 support was requested, but IPv6 sockets are not available])
 fi
 if test "$have_ipv6" = yes; then
    AC_DEFINE(HAVE_IPV6, 1, [IPv6 support present and enabled])
