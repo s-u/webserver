@@ -1,12 +1,11 @@
 addHandler <- function(type, prefix, ...)
     UseMethod("addHandler")
 
-addHandler.character <- function(type, prefix, ...) {
-    if (identical(type, "static"))
-        add.static.handler(prefix, ...)
-    else
-        .External(C_add_handler, type, prefix, ...)
-}
+addHandler.character <- function(type, prefix, ...)
+    invisible(if (identical(type, "static"))
+                  add.static.handler(prefix, ...)
+              else
+                  .External(C_add_handler, type, prefix, ...))
 
 ## the static handler appends the rest of the URL path to its path, so it
 ## must end with a slash and be absolute (the working directory may change)
