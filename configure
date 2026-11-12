@@ -4464,7 +4464,7 @@ printf %s "checking for the pthreads library -l$flag... " >&6; }
 /* end confdefs.h.  */
 #include <pthread.h>
                         static void routine(void *a) { a = 0; }
-                        static void atfork_null() { }
+                        static void atfork_null(void) { }
                         static void *start_routine(void *a) { return a; }
 int
 main (void)
