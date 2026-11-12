@@ -1,4 +1,93 @@
 1.0-0
+   o	webstart() accepts connections on one or more listeners
+	specified by listen=, each a port number (local HTTP),
+	"http://<host>:<port>", "https://<host>:<port>" or "unix:<path>"
+	(local socket, unix only). <host> can be "localhost" (local
+	connections only), "*" (all IPv4 interfaces), a numeric IPv4
+	address or an IPv6 address in [] (e.g., "[::1]" or "[::]").
+	IPv6 listeners only accept IPv6 connections on all systems, so
+	"https://*" and "https://[::]" together serve both. simple()
+	passes further arguments (such as threads) on to webstart().
+
+   o	TLS/SSL (HTTPS) support. Listeners using "https://" require a
+	server certificate and its private key (PEM format) specified
+	with tls.cert and tls.key. The key defaults to tls.cert, so a
+	single file with both is sufficient. The minimal configuration
+	is
+
+	  webstart("https://*:8443", tls.cert="server.crt",
+	           tls.key="server.key")
+
+	If the certificate was issued by an intermediate CA, its
+	certificate(s) must be sent along with the server certificate:
+	either append them to the tls.cert file (after the server
+	certificate) or specify a separate file with tls.ca.
+
+	HTTP and HTTPS listeners can be combined, e.g., to serve local
+	clients without encryption:
+
+	  webstart(c(8080, "https://*:8443"), tls.cert="server.pem")
+
+	The tls.* arguments apply to all HTTPS listeners, but can also
+	have one value per HTTPS listener, e.g., to use different
+	certificates on different ports.
+
+	Clients can be required to authenticate with a certificate:
+	tls.client.ca specifies the CA certificate(s) the client
+	certificates must be issued by, connections without a valid
+	certificate are rejected. tls.client.cn further restricts the
+	allowed common names of the client certificates, a name can
+	start or end with * to match a suffix or a prefix:
+
+	  webstart("https://*:8443", tls.cert="server.pem",
+	           tls.client.ca="corp-ca.pem",
+	           tls.client.cn=c("alice", "*.corp.example.com"))
+
+	The client CA should be dedicated to issuing client certificates
+	(e.g., the organisation's own CA), since every certificate it
+	issued is accepted unless tls.client.cn is used.
+
+	TLS 1.2 or higher is used, encrypted private keys are not
+	supported. TLS requires OpenSSL 1.1.0 or higher at build time,
+	hasTLS() reports whether TLS is supported.
+
+   o	R handlers receive the headers Request-Proto (http or https,
+	depending on the listener) and, if the client presented a valid
+	certificate, Request-Client-CN with its common name, so handlers
+	can identify clients. Header names starting with Request- are
+	reserved for the server, such headers sent by the client
+	(including the already present Request-Method) are dropped.
+
+   o	R handlers can decode the request body: addHandler("rfun", ...)
+	has a parse.body argument which is either FALSE (default, raw
+	body), TRUE (use defaultBodyParsers()) or a named list of
+	parsers function(body, content.type) where the names are media
+	types, optionally starting or ending with * to match a suffix
+	or prefix (e.g., "*+json" or "text/*"). The default
+	parsers decode URL encoded forms into a named character vector
+	(like the query) and, if jsonlite is installed, JSON. If the
+	body cannot be parsed, the request is answered with 400 Bad
+	Request without calling the handler, e.g.,
+
+	  addHandler("rfun", "/api", FUN, parse.body=TRUE)
+
+	simple() uses parse.body=TRUE by default, so its R handler
+	receives decoded form and JSON bodies (parse.body=FALSE passes
+	the raw body).
+
+   o	folded header lines (obsolete since HTTP/1.1) are rejected with
+	400 Bad Request.
+
+   o	TLS support was never enabled on Windows (wrong macro in the
+	Windows configuration) and configure enabled it even when no
+	OpenSSL was found.
+
+   o	if a listener cannot be started, the error now includes the
+	reason (e.g., address already in use).
+
+   o	an existing file at the path of a unix socket is no longer
+	removed unless it is a socket.
+
    o	forked children (fork=TRUE) no longer try to re-seed the
 	system RNG (the code was never active). They inherit the R RNG
 	state of the parent, see ?webstart for how to get independent
