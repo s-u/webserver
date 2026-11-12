@@ -225,7 +225,7 @@ for flag in $ax_pthread_flags; do
         # will appear to work without -pthread even though it doesn't.
         AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <pthread.h>
                         static void routine(void *a) { a = 0; }
-                        static void atfork_null() { }
+                        static void atfork_null(void) { }
                         static void *start_routine(void *a) { return a; }],
                        [pthread_t th; pthread_attr_t attr;
                         pthread_atfork(atfork_null, atfork_null, atfork_null);
