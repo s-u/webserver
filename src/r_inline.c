@@ -74,11 +74,13 @@ static int r_off_main;
 
 extern uintptr_t R_CStackLimit, R_CStackStart;
 
-void r_inline_setup(int flags) {
+int r_inline_setup(int flags) {
     if ((flags & RIF_ASYNC) && !r_queue) {
-	r_queue = async_queue_new();
+	if (!(r_queue = async_queue_new()))
+	    return 0;
 	r_off_main = 1;
     }
+    return 1;
 }
 
 /* Returns the number of bytes of C stack available below `here` in the

@@ -26,7 +26,8 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user);
    NOTE: this function does NOT perform any locking. */
 void r_inline_process(http_request_t *req, http_result_t *res, SEXP sFun, int flags);
 
-void r_inline_setup(int flags);
+/* returns 0 if the setup failed */
+int  r_inline_setup(int flags);
 void r_inline_thread_end(void);
 void r_inline_end(void);
 

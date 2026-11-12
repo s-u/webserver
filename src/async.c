@@ -93,6 +93,16 @@ static void async_thread_call_cleanup(async_queue *q) {
     }
 }
 
+/* wakes up the poll thread. If the pipe is full a wake-up is already
+   pending, so the result can be ignored */
+static void wake_poll(async_queue *q) {
+#ifdef WIN32
+    send(q->pfd[1], "", 1, 0);
+#else
+    if (write(q->pfd[1], "", 1) < 0) {}
+#endif
+}
+
 async_queue *async_queue_new(void) {
     nfds_t max_pf = 8192;
     async_queue *q = (async_queue*) malloc(sizeof(async_queue) + sizeof(struct pollfd) * max_pf);
@@ -106,7 +116,10 @@ async_queue *async_queue_new(void) {
     q->poll_job = 0;
     q->process_jobs = 0;
     q->cleanup = 0;
-    pipe(q->pfd);
+    if (pipe(q->pfd)) {
+	free(q);
+	return 0;
+    }
     q->active = 1;
     pthread_mutex_init(&(q->mux), 0);
     pthread_cond_init(&(q->cond), 0);
@@ -187,11 +200,7 @@ static int async_queue_add_(async_queue *q, client_connection_t *conn, int lock)
 	}
 	q->n++;
 
-#ifdef WIN32
-	send(q->pfd[1], "", 1, 0);
-#else
-	write(q->pfd[1], "", 1);
-#endif
+	wake_poll(q);
     }
 
     if (lock) pthread_mutex_unlock(&(q->mux));
@@ -285,7 +294,8 @@ void async_queue_poll(async_queue *q, double timeout) {
 #ifdef WIN32
 	    recv(q->pf[i].fd, xx, 4, 0);
 #else
-	    read(q->pf[i].fd, xx, 4);
+	    /* only drains wake-up bytes, so failures don't matter */
+	    if (read(q->pf[i].fd, xx, 4) < 0) {}
 #endif
 	}
 	i++;
@@ -473,11 +483,7 @@ int async_queue_finish(async_queue *q) {
     pthread_mutex_unlock(&(q->mux));
 
     /* trigger poll */
-#ifdef WIN32
-    send(q->pfd[1], "", 1, 0);
-#else
-    write(q->pfd[1], "", 1);
-#endif
+    wake_poll(q);
     if (q->poll_job) {
 	DBG(ulog_info("async_queue_finish: waiting for poll thread"));
 	if (pthread_join(q->poll_job->thread, &ret))

@@ -241,7 +241,11 @@ SEXP C_start(SEXP sListen, SEXP sThreads, SEXP sFork) {
 
     ulog_set_app_name("Rwebserver");
 
-    r_inline_setup(threads > 0 ? RIF_ASYNC : 0);
+    if (!r_inline_setup(threads > 0 ? RIF_ASYNC : 0)) {
+	/* processing threads cannot evaluate R safely without the queue */
+	Rf_warning("cannot create the R evaluation queue, using threads=0");
+	threads = 0;
+    }
 
     if (use_fork)
 	flags |= SRV_FORK;
