@@ -180,6 +180,12 @@ test("proto: keep-alive mixed static/rfun", {
 test("proto: Connection: close honoured", {
     con <- conn(3); on.exit(close(con)); send(con, "GET /echo HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
     read.resp(con); expect(closed(con)) })
+## closed() cannot tell EOF from its timeout, so check that the close is immediate
+## (on Linux a close by a processing thread used to wait for the poll timeout)
+test("proto: Connection: close closes promptly", {
+    con <- conn(5); on.exit(close(con)); send(con, "GET /echo HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    read.resp(con); t0 <- Sys.time(); expect(closed(con))
+    expect(elapsed(t0) < 1, sprintf("closed after %.2fs", elapsed(t0))) })
 test("proto: Connection header is case-insensitive", {
     con <- conn(3); on.exit(close(con)); send(con, "GET /echo HTTP/1.1\r\nHost: x\r\nCONNECTION: Close\r\n\r\n")
     read.resp(con); expect(closed(con)) })
