@@ -12,9 +12,9 @@ srv <- NULL
 pid.alive <- function(pid) {
     if (is.na(pid)) return(FALSE)
     if (!WIN) return(isTRUE(tools::pskill(pid, 0)))
-    any(grepl(paste0("^\\S+\\s+", pid, "\\s"),
-              suppressWarnings(system2("tasklist", c("/NH", "/FI", shQuote(paste("PID eq", pid), type="cmd")),
-                                       stdout=TRUE))))
+    ## pskill() always terminates on Windows, but psnice() only queries the
+    ## process (NA if it doesn't exist); tasklist needs rights we may not have
+    !is.na(tools::psnice(pid))
 }
 ## the fixtures print "PID <pid>" as their first line (Rscript may be a wrapper
 ## so the pid of the process we start is not necessarily that of R)
