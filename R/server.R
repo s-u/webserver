@@ -1,25 +1,36 @@
 addHandler <- function(type, prefix, ...)
     UseMethod("addHandler")
 
-addHandler.character <- function(type, prefix, ...)
-    .External(C_add_handler, type, prefix, ...)
+addHandler.character <- function(type, prefix, ...) {
+    if (identical(type, "static"))
+        add.static.handler(prefix, ...)
+    else
+        .External(C_add_handler, type, prefix, ...)
+}
+
+## the static handler appends the rest of the URL path to its path, so it
+## must end with a slash and be absolute (the working directory may change)
+add.static.handler <- function(prefix, path, ...) {
+    if (!is.character(path) || length(path) != 1L || is.na(path))
+        stop("path must be a string")
+    path <- path.expand(path)
+    if (!dir.exists(path))
+        stop("path '", path, "' does not exist")
+    ## we need the absolute path. normalizePath() has issues on Windows
+    ## and we don't really care about canonicalization so going through
+    ## setwd+getwd is the best way.
+    wd <- setwd(path)
+    path <- tryCatch(getwd(), finally=setwd(wd))
+    .External(C_add_handler, "static", prefix, paste0(sub("/$", "", path), "/"), ...)
+}
 
 rmAllHandlers <- function()
     .Call(C_remove_all_handlers)
 
 simple <- function(listen=8080L, path=".", prefix="/", index="index.html", start=TRUE,
                    Rfun=get0(".http.request"), Rfun.prefix="/", ...) {
-    if (is.character(path)) {
-        path <- path.expand(path)
-        if (!dir.exists(path))
-            stop("path '", path, "' does not exist")
-        ## we need the absolute path. normalizePath() has issues on Windows
-        ## and we don't really care about canonicalization so going through
-        ## setwd+getwd is the best way.
-        wd <- setwd(path)
-        path <- tryCatch(getwd(), finally=setwd(wd))
-        addHandler("static", prefix, path=paste0(path, "/"), index=index)
-    }
+    if (is.character(path))
+        addHandler("static", prefix, path, index=index)
     if (is.function(Rfun))
         addHandler("rfun", Rfun.prefix, Rfun)
     if (start) {
