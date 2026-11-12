@@ -401,7 +401,11 @@ void async_queue_process(async_queue *q, double timeout) {
 		    FD_SET(c->conn->info.s, &fds);
 		    if (select(c->conn->info.s + 1, &fds, 0, 0, &tv) < 1) /* not ready */
 			block_state |= ACS_READY;
-		}
+		} else
+		    /* the connection was closed, but a poll() in progress keeps the
+		       socket open (on Linux the client doesn't see the close until
+		       poll() returns), so wake up the poll thread */
+		    wake_poll(q);
 		/* lock to signal we're done */
 		pthread_mutex_lock(&(q->mux));
 		c->state &= ~block_state;
