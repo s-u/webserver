@@ -33,7 +33,10 @@ typedef struct r_inline {
     SEXP sFun;
     int prefix_len;
     int flags;
+    unsigned int serial; /* creation order, see r_inline_handler() */
 } r_inline;
+
+static unsigned int last_serial;
 
 void r_inline_free(r_inline *obj) {
     if (!obj)
@@ -108,6 +111,7 @@ r_inline *r_inline_entry(const char *prefix, SEXP sFun, int flags) {
     if (!r || !(r->prefix = strdup(prefix)))
 	return 0;
     r->flags = flags;
+    r->serial = ++last_serial;
     r->prefix_len = strlen(prefix); /* cached for performance */
     r->sFun = sFun;
     if (sFun && sFun != R_NilValue)
@@ -355,7 +359,13 @@ struct client_connection {
     client_connection_info_t info;
 };
 
+/* The forked worker of this thread evaluates all fork=TRUE handlers. It only
+   knows the handlers that existed when it was forked (worker_serial is the
+   last serial at that time), so it is replaced if a newer one is used. */
 static __thread client_connection_t *worker;
+static __thread unsigned int worker_serial;
+/* set in the worker, which evaluates the handlers in-process */
+static int in_worker;
 
 void r_inline_thread_end();
 
@@ -400,21 +410,11 @@ void r_inline_unlock(void) {
 /* called in the child right after fork() while the lock is held by the
    (only remaining) thread: the child is single-threaded, so it needs no lock. */
 void r_inline_fork_child(void) {
+    in_worker = 1;
     if (r_queue) {
 	async_queue_end(r_queue);
 	r_queue = 0;
     }
-}
-
-/* private copy of a handler for use in a forked worker, which must evaluate
-   in-process instead of delegating to yet another worker */
-r_inline *r_inline_worker_entry(r_inline *r) {
-    r_inline *c = (r_inline*) malloc(sizeof(r_inline));
-    if (!c)
-	return r;
-    *c = *r;
-    c->flags &= ~RIF_FORK;
-    return c;
 }
 
 void r_inline_thread_end() {
@@ -449,12 +449,12 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
     }
     DBG(ulog_debug("r_inline: matched"));
 
-    if (r->flags & RIF_FORK) {
+    if ((r->flags & RIF_FORK) && !in_worker) {
 	client_connection_t *old_worker = 0;
 	int opr = 0;
 	do {
 	    /* check if the current worker is usable */
-	    if (worker && !r_ext_ready(worker)) {
+	    if (worker && (!r_ext_ready(worker) || r->serial > worker_serial)) {
 		if (old_worker) {
 		    DBG(ulog_debug("r_inline: releasing non-functional worker %p", (void*) old_worker));
 		    if (old_worker->info.srv && old_worker->info.srv->conn_fin)
@@ -468,7 +468,8 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 	    if (!worker) {
 		DBG(ulog_debug("r_inline: RIF_FORK requested, starting new worker"));
 		r_inline_fork_lock();
-		worker = r_ext_new_worker(r);
+		worker = r_ext_new_worker();
+		worker_serial = last_serial;
 		r_inline_fork_unlock();
 		if (!worker) {
 		    /* we delayed the destruction of the old worker for
@@ -486,7 +487,7 @@ int r_inline_handler(http_request_t *req, http_result_t *res, void *user) {
 	    }
 	    DBG(ulog_debug("r_inline: switching to r_ext worker at %p (%d)",
 			   (void*) worker, (int) worker->info.s));
-	    opr = r_ext_one_request(worker, req, res);
+	    opr = r_ext_one_request(worker, r, req, res);
 	    if (opr == -2) /* worker failed */
 		DBG(ulog_debug("r_inline: worker failed - respawning"));
 	} while (opr == -2);

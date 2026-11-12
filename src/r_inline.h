@@ -38,6 +38,5 @@ void r_inline_unlock(void);
 void r_inline_fork_lock(void);
 void r_inline_fork_unlock(void);
 void r_inline_fork_child(void);
-r_inline *r_inline_worker_entry(r_inline *r);
 
 #endif

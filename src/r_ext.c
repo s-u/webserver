@@ -40,7 +40,9 @@ struct rmsg {
 	    int32_t  path, query, fragment, content_type, headers, auth;
 	    int32_t  processing_flags;
 	    char     method[8];
-	    uint32_t res2, res3, res4, res5, res6;
+	    uint32_t res2;
+	    uint64_t handler; /* r_inline handler to use (valid in the worker) */
+	    uint32_t res5, res6;
 	} req;
 	struct rmsg_res {
 	    int32_t  code, headers, err, content_type, flags, payload_type;
@@ -190,7 +192,6 @@ struct client_connection {
     int    state;
     struct rmsg hdr;
     size_t hdr_pos, pos, len, alloc;
-    r_inline *ri;
     char  *buf;
 };
 
@@ -366,7 +367,7 @@ static void r_process(client_connection_t *c) {
 	    /* IMPORTANT: we are relying r_inline_handler NOT changing req,
 	       becasue we use our special references-to-one-big-buffer approach,
 	       so those may not be freed by the handler */
-	    int n = r_inline_handler(&req, &res, c->ri);
+	    int n = r_inline_handler(&req, &res, (r_inline*) (uintptr_t) c->hdr.h.req.handler);
 	    DBG(ulog_debug("r_inline_handler returned %d", n));
 	    /* r_inline_handler clears RF_REFUSED and signals it via the return
 	       value, but the parent can only see the flag, so put it back */
@@ -434,7 +435,7 @@ static server_t *new_remote_server(int flags) {
 }
 #endif
 
-int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t *res) {
+int r_ext_one_request(client_connection_t *c, r_inline *ri, http_request_t *req, http_result_t *res) {
     size_t l = build_request_hdr(req, &c->hdr, c->buf, c->alloc);
     if (l > c->alloc) {
 	if (c->buf)
@@ -453,6 +454,8 @@ int r_ext_one_request(client_connection_t *c, http_request_t *req, http_result_t
 	req->body_len = 0;
     c->hdr.cmd = CMD_HTTP_REQ;
     c->hdr.msg_flags = 0;
+    /* the worker is a copy of this process, so the pointer is valid there */
+    c->hdr.h.req.handler = (uint64_t) (uintptr_t) ri;
     c->hdr.hdr_len = l;
     c->hdr.body_len = req->body_len;
     c->hdr.res = 0;
@@ -532,7 +535,7 @@ static void sighandler(int sig) {
 }
 #endif
 
-client_connection_t *r_ext_new_worker(r_inline *ri) {
+client_connection_t *r_ext_new_worker(void) {
 #ifdef WIN32
     ulog_error("Windows does not support forked workers.");
     return 0;
@@ -571,7 +574,6 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
 	r_inline_fork_child();
 	c->info.s = ios[1];
 	c->info.srv = remote_server;
-	c->ri = r_inline_worker_entry(ri);
 #ifndef WIN32
 	{
 	    sigset_t set;
@@ -603,7 +605,6 @@ client_connection_t *r_ext_new_worker(r_inline *ri) {
     c->info.s = ios[0];
     c->pid = f;
     c->info.srv = remote_server;
-    c->ri = ri;
     return c;
 #endif /* !WIN32 */
 }
