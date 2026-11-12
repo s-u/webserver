@@ -92,6 +92,8 @@ make.docroot <- function() {
     docroot <- file.path(tempfile("wstest"), "root")
     dir.create(file.path(docroot, "sub"), recursive=TRUE)
     dir.create(file.path(docroot, "emptydir"))
+    dir.create(file.path(docroot, "a b%"))
+    wl("<h1>a b%</h1>", file.path(docroot, "a b%", "index.html"))
     wl("hello world", file.path(docroot, "hello.txt"))
     wl("<h1>root</h1>", file.path(docroot, "index.html"))
     wl("<h1>sub</h1>", file.path(docroot, "sub", "index.html"))

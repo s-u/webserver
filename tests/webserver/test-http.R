@@ -19,6 +19,9 @@ test("static: index at root", { r <- get("/static/"); expect(r$status == 200 && 
 test("static: index in subdir with slash", { r <- get("/static/sub/"); expect(r$status == 200 && has(r$text, "sub"), r) })
 test("static: subdir without slash serves index or redirects", {
     r <- get("/static/sub"); expect.in(r$status, c(200, 301, 302, 307, 308), r) })
+test("static: redirect Location is percent-encoded", {
+    r <- get("/static/a%20b%25"); expect(r$status == 301, r)
+    expect(identical(r$headers[["location"]], "/static/a%20b%25/"), r) })
 test("static: dir without index is not listed", expect.in(get("/static/emptydir/")$status, c(403, 404)))
 test("static: missing -> 404", expect(get("/static/nope.txt")$status == 404))
 test("static: unmatched path -> 404", expect(get("/no-such-thing")$status == 404))
