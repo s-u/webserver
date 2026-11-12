@@ -1347,7 +1347,8 @@ Optional Features:
   --disable-option-checking  ignore unrecognized --enable/--with options
   --disable-FEATURE       do not include FEATURE (same as --enable-FEATURE=no)
   --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
-  --enable-ipv6           enable the use of IPv6 protocol. [no]
+  --enable-ipv6           enable the use of IPv6 protocol. (default is [auto]
+                          which means enabled if IPv6 sockets are available)
   --enable-tls            enable the use of secure sockets using TLS/SSL.
                           (default is [auto] which means enabled is OpenSSL is
                           present)
@@ -2444,7 +2445,7 @@ if test ${enable_ipv6+y}
 then :
   enableval=$enable_ipv6; want_ipv6="${enableval}"
 else case e in #(
-  e) want_ipv6=no ;;
+  e) want_ipv6=auto ;;
 esac
 fi
 
@@ -3862,9 +3863,9 @@ fi
 have_ipv6=no
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether to enable IPv6" >&5
 printf %s "checking whether to enable IPv6... " >&6; }
-if test "$want_ipv6" = yes; then
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-printf "%s\n" "yes" >&6; }
+if test "$want_ipv6" != no; then
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $want_ipv6" >&5
+printf "%s\n" "$want_ipv6" >&6; }
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for working IPv6 sockets" >&5
 printf %s "checking for working IPv6 sockets... " >&6; }
 cat confdefs.h - <<_ACEOF >conftest.$ac_ext
@@ -3872,12 +3873,13 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 int main(void) {
     struct sockaddr_in6 sin;
     int i = socket(PF_INET6, SOCK_STREAM, 0);
     sin.sin6_family = AF_INET6;
     sin.sin6_addr = in6addr_any;
-    return 0;
+    return inet_pton(AF_INET6, "::1", &sin.sin6_addr) == 1 ? 0 : i;
 }
 
 _ACEOF
@@ -3896,6 +3898,9 @@ rm -f core conftest.err conftest.$ac_objext conftest.beam \
 else
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
 printf "%s\n" "no" >&6; }
+fi
+if test "x${want_ipv6}${have_ipv6}" = xyesno; then
+   as_fn_error $? "IPv6 support was requested, but IPv6 sockets are not available" "$LINENO" 5
 fi
 if test "$have_ipv6" = yes; then
 
