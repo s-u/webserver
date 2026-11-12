@@ -26,9 +26,8 @@ add.rfun.handler <- function(prefix, FUN, ..., parse.body=FALSE) {
 defaultBodyParsers <- function() {
     p <- list("application/x-www-form-urlencoded" = function(body, content.type)
         .Call(C_parse_query, body))
-    if (requireNamespace("jsonlite", quietly=TRUE))
-        p[["application/json"]] <- p[["*+json"]] <- function(body, content.type)
-            jsonlite::fromJSON(rawToChar(body), simplifyDataFrame=FALSE, simplifyMatrix=FALSE)
+    p[["application/json"]] <- p[["*+json"]] <- function(body, content.type)
+        jsonlite::fromJSON(rawToChar(body), simplifyDataFrame=FALSE, simplifyMatrix=FALSE)
     p
 }
 

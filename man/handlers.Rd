@@ -189,9 +189,9 @@ found.
 
   \code{defaultBodyParsers()} returns a parser for URL encoded forms
   (\code{application/x-www-form-urlencoded}) which produces a named
-  character vector like the parsed query and, if the \pkg{jsonlite}
-  package is installed, parsers for JSON (\code{application/json} and
-  \code{*+json}) using \code{jsonlite::fromJSON()}. The list can be
+  character vector like the parsed query and parsers for JSON
+  (\code{application/json} and \code{*+json}) using
+  \code{jsonlite::fromJSON()}. The list can be
   modified or extended to define the parsers of a handler, e.g.,
 
   \code{addHandler("rfun", "/api", FUN, parse.body=c(defaultBodyParsers(),

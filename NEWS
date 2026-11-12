@@ -65,7 +65,7 @@
 	types, optionally starting or ending with * to match a suffix
 	or prefix (e.g., "*+json" or "text/*"). The default
 	parsers decode URL encoded forms into a named character vector
-	(like the query) and, if jsonlite is installed, JSON. If the
+	(like the query) and JSON (using jsonlite). If the
 	body cannot be parsed, the request is answered with 400 Bad
 	Request without calling the handler, e.g.,
 

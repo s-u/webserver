@@ -15,35 +15,33 @@ test("arg=\"x\" is optional with default \"x\"", expect(!a$d$required && identic
 test("arg=1L is optional with default 1L", expect(!a$e$required && identical(a$e$default, 1L)))
 test("optional(conv) conversion applied", expect(identical(a$c$convert("7"), 7)))
 
-## end-to-end through spec() (which needs jsonlite)
-if (requireNamespace("jsonlite", quietly=TRUE)) {
-    api <- ns$spec(list(add=function(x=required(as.numeric), y=optional(10, as.numeric)) x + y,
-                        greet=function(name="world") paste("hello", name),
-                        err=function() stop("nope")))
-    ## results must be rfun responses: list(payload, content-type[, headers[, status]])
-    json <- function(x) list(as.character(jsonlite::toJSON(x, auto_unbox=TRUE)), "application/json")
-    test("spec: unknown path -> 404 response", expect(
-           identical(api("/missing")[[4]], 404L) && identical(api("/missing")[[2]], "application/json")))
-    test("spec: required param missing is reported as JSON", expect(
-           grepl("Required parameter", api("/add", NULL, NULL, NULL)[[1]]) &&
-           identical(api("/add", NULL, NULL, NULL)[[2]], "application/json")))
-    test("spec: query args converted and added", expect(
-           identical(api("/add", c(x="1", y="2"), NULL, NULL), json(3))))
-    test("spec: default used when arg omitted", expect(
-           identical(api("/greet", NULL, NULL, NULL), list("hello world", "text/plain"))))
-    test("spec: error becomes a JSON response, not an R error", expect(
-           identical(api("/err", NULL, NULL, NULL)[[2]], "application/json") &&
-           grepl('"success":false', api("/err", NULL, NULL, NULL)[[1]])))
-    api2 <- ns$spec(list(lst=function() list(a=1, b="x"),
-                         js=function() jsonlite::toJSON(list(z=TRUE), auto_unbox=TRUE),
-                         raw=function() I(list("low-level", "text/csv", character(), 202L))))
-    test("spec: list result -> JSON", expect(identical(api2("/lst", NULL, NULL, NULL), json(list(a=1, b="x")))))
-    test("spec: json result sent as-is", expect(identical(api2("/js", NULL, NULL, NULL), list('{"z":true}', "application/json"))))
-    test("spec: I() result passed through as response", expect(
-           identical(api2("/raw", NULL, NULL, NULL), list("low-level", "text/csv", character(), 202L))))
-    test("spec: JSON body arguments", expect(
-           identical(api("/add", NULL, structure(charToRaw('{"x":2,"y":5}'), "content-type"="application/json"), NULL), json(7))))
-} else cat("(jsonlite not installed: skipping end-to-end spec tests)\n")
+## end-to-end through spec()
+api <- ns$spec(list(add=function(x=required(as.numeric), y=optional(10, as.numeric)) x + y,
+                    greet=function(name="world") paste("hello", name),
+                    err=function() stop("nope")))
+## results must be rfun responses: list(payload, content-type[, headers[, status]])
+json <- function(x) list(as.character(jsonlite::toJSON(x, auto_unbox=TRUE)), "application/json")
+test("spec: unknown path -> 404 response", expect(
+       identical(api("/missing")[[4]], 404L) && identical(api("/missing")[[2]], "application/json")))
+test("spec: required param missing is reported as JSON", expect(
+       grepl("Required parameter", api("/add", NULL, NULL, NULL)[[1]]) &&
+       identical(api("/add", NULL, NULL, NULL)[[2]], "application/json")))
+test("spec: query args converted and added", expect(
+       identical(api("/add", c(x="1", y="2"), NULL, NULL), json(3))))
+test("spec: default used when arg omitted", expect(
+       identical(api("/greet", NULL, NULL, NULL), list("hello world", "text/plain"))))
+test("spec: error becomes a JSON response, not an R error", expect(
+       identical(api("/err", NULL, NULL, NULL)[[2]], "application/json") &&
+       grepl('"success":false', api("/err", NULL, NULL, NULL)[[1]])))
+api2 <- ns$spec(list(lst=function() list(a=1, b="x"),
+                     js=function() jsonlite::toJSON(list(z=TRUE), auto_unbox=TRUE),
+                     raw=function() I(list("low-level", "text/csv", character(), 202L))))
+test("spec: list result -> JSON", expect(identical(api2("/lst", NULL, NULL, NULL), json(list(a=1, b="x")))))
+test("spec: json result sent as-is", expect(identical(api2("/js", NULL, NULL, NULL), list('{"z":true}', "application/json"))))
+test("spec: I() result passed through as response", expect(
+       identical(api2("/raw", NULL, NULL, NULL), list("low-level", "text/csv", character(), 202L))))
+test("spec: JSON body arguments", expect(
+       identical(api("/add", NULL, structure(charToRaw('{"x":2,"y":5}'), "content-type"="application/json"), NULL), json(7))))
 
 ## fds2file / R.run helpers are unix-only conveniences; just check argument validation
 test("addHandler rejects unknown type", expect.error(addHandler("bogus", "/")))
@@ -87,11 +85,9 @@ test("parse.body: failing parser -> 400", expect(is.400(pb("x", "text/plain", li
 test("parse.body: function name looked up at request time", {
     assign(".ws.test.fn", function(...) "by name", envir=.GlobalEnv); on.exit(rm(".ws.test.fn", envir=.GlobalEnv))
     expect(identical(webserver:::body.parsing.handler(quote(.ws.test.fn), list())("/", NULL, NULL, NULL, "GET"), "by name")) })
-if (requireNamespace("jsonlite", quietly=TRUE)) {
-    test("parse.body: JSON", expect(identical(pb('{"a":1,"b":[1,2]}', "application/json"), list(a=1L, b=1:2))))
-    test("parse.body: +json suffix", expect(identical(pb('{"a":1}', "application/vnd.api+json"), list(a=1L))))
-    test("parse.body: malformed JSON -> 400", expect(is.400(pb('{"a":', "application/json"))))
-}
+test("parse.body: JSON", expect(identical(pb('{"a":1,"b":[1,2]}', "application/json"), list(a=1L, b=1:2))))
+test("parse.body: +json suffix", expect(identical(pb('{"a":1}', "application/vnd.api+json"), list(a=1L))))
+test("parse.body: malformed JSON -> 400", expect(is.400(pb('{"a":', "application/json"))))
 test("parse.body: invalid values rejected", {
     expect.error(addHandler("rfun", "/x", function(...) 1, parse.body="yes"))
     expect.error(addHandler("rfun", "/x", function(...) 1, parse.body=list(function(b, ct) 1)))

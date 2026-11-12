@@ -156,8 +156,6 @@ env2spec <- function(env, names, rho=parent.frame()) {
 }
 
 spec <- function(def) {
-  if (!requireNamespace("jsonlite", quietly=TRUE))
-    stop("spec() requires the jsonlite package")
   .api <- env2spec(def)
   function(path, ...) {
     if (is.function(f <- .api[[gsub("^/+","",path)]]))

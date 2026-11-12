@@ -92,10 +92,10 @@ post.parsed <- function(ct, body) request("POST", "/parsed", headers=list("Conte
 test("rfun: parse.body form", {
     r <- post.parsed("application/x-www-form-urlencoded", "a=1&b=x+y%21")
     expect(r$status == 200 && identical(r$text, 'character:c(a = "1", b = "x y!")'), r) })
-test("rfun: parse.body JSON", skip=if (!requireNamespace("jsonlite", quietly=TRUE)) "jsonlite not installed", {
+test("rfun: parse.body JSON", {
     r <- post.parsed("application/json; charset=utf-8", '{"a":1,"b":[1,2]}')
     expect(r$status == 200 && identical(r$text, "list:list(a = 1L, b = 1:2)"), r) })
-test("rfun: parse.body malformed JSON -> 400", skip=if (!requireNamespace("jsonlite", quietly=TRUE)) "jsonlite not installed", {
+test("rfun: parse.body malformed JSON -> 400", {
     r <- post.parsed("application/json", '{"a":'); expect(r$status == 400, r); healthy() })
 test("rfun: parse.body custom parser by prefix", {
     r <- post.parsed("Text/Plain", "abc"); expect(r$status == 200 && identical(r$text, 'character:"ABC"'), r) })
