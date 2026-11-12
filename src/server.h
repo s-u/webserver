@@ -52,6 +52,8 @@
 
 #define sockerrno WSAGetLastError()
 
+int initSock(void); /* initializes Winsock (once), see server.c */
+
 /* Winsock reports errors via WSAGetLastError() with its own codes, so
    the errno constants used to classify socket errors must map to those */
 #include <errno.h>

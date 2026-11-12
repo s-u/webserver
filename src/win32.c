@@ -34,9 +34,12 @@ static int X(const char *where, int res) {
 /* Windows doesn't support select/poll on pipes, neither does it provide
    socketpair() so we have to create two sockets and connect them */
 int pipe(SOCKET fds[2]) {
-    SOCKET s1 = socket(AF_INET, SOCK_STREAM, 0), s2, s3;
+    SOCKET s1, s2, s3;
     struct sockaddr_in sbind;
     socklen_t len;
+    /* pipe() may be used before any server has initialized Winsock */
+    if (initSock()) return -1;
+    s1 = socket(AF_INET, SOCK_STREAM, 0);
     if (s1 == INVALID_SOCKET) return -1;
     sbind.sin_family = AF_INET;
     sbind.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
