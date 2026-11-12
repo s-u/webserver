@@ -1,4 +1,11 @@
-1.0-0
+1.0-1
+   o	The redirect of a static directory request without the
+	trailing slash percent-encodes the path in the Location:
+	header. Previously, paths with spaces, % or other special
+	characters resulted in an invalid location.
+
+
+1.0-0	2026-11-12
    o	webstart() accepts connections on one or more listeners
 	specified by listen=, each a port number (local HTTP),
 	"http://<host>:<port>", "https://<host>:<port>" or "unix:<path>"
