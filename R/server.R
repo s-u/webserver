@@ -86,11 +86,11 @@ rmAllHandlers <- function()
     .Call(C_remove_all_handlers)
 
 simple <- function(listen=8080L, path=".", prefix="/", index="index.html", start=TRUE,
-                   Rfun=get0(".http.request"), Rfun.prefix="/", ...) {
+                   Rfun=get0(".http.request"), Rfun.prefix="/", parse.body=TRUE, ...) {
     if (is.character(path))
         addHandler("static", prefix, path, index=index)
     if (is.function(Rfun))
-        addHandler("rfun", Rfun.prefix, Rfun)
+        addHandler("rfun", Rfun.prefix, Rfun, parse.body=parse.body)
     if (start) {
         on.exit(rmAllHandlers())
         webstart(listen, ...)
