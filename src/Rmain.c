@@ -252,7 +252,8 @@ SEXP C_start(SEXP sListen, SEXP sThreads, SEXP sFork) {
 
     for (i = 0; i < n; i++) {
 	SEXP l = VECTOR_ELT(sListen, i), sAddr = list_elt(l, "address");
-	const char *proto = tls[i] ? "HTTPS" : "HTTP";
+	int is_tls = (tls[i] != 0); /* tls[i] is cleared once the server owns it */
+	const char *proto = is_tls ? "HTTPS" : "HTTP";
 	int lflags = flags;
 	if (asLogical(list_elt(l, "ipv6")) == TRUE)
 	    lflags |= SRV_IPV6;
@@ -269,11 +270,18 @@ SEXP C_start(SEXP sListen, SEXP sThreads, SEXP sFork) {
 	}
 	if (!sock[i]) {
 	    client_connection_info_t info;
-	    if (!server_get_info(srv[i], &info))
+	    if (!server_get_info(srv[i], &info)) {
+		int port = (int) ntohs(info.sa.ip4.sin_port);
 		ulog_info("started %s server on %s port %d", proto,
-			  (info.sa.ip4.sin_family == AF_INET) ? "IPv4" : "IPv6",
-			  (int) ntohs(info.sa.ip4.sin_port));
-	    else
+			  (info.sa.ip4.sin_family == AF_INET) ? "IPv4" : "IPv6", port);
+		/* the port was chosen by the system, so the user needs to know it */
+		if (asInteger(list_elt(l, "port")) == 0) {
+		    int v6 = (lflags & SRV_IPV6) ? 1 : 0;
+		    REprintf("Listening on %s://%s%s%s:%d\n", is_tls ? "https" : "http",
+			     v6 ? "[" : "", addr ? addr : ((lflags & SRV_LOCAL) ? "localhost" : "*"),
+			     v6 ? "]" : "", port);
+		}
+	    } else
 		ulog_info("started %s server on %s", proto, spec_elt(l));
 	} else
 	    ulog_info("started HTTP server on socket '%s'", sock[i]);

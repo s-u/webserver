@@ -98,7 +98,9 @@ hasTLS()
   IPv6 connections, so \code{c("https://*:8443", "https://[::]:8443")}
   accepts connections on all IPv4 and IPv6 interfaces. Host names other than
   \code{localhost} are not supported. If the port is omitted, it is 80
-  for HTTP and 443 for HTTPS. Port 0 means any free port.
+  for HTTP and 443 for HTTPS. Port 0 means any free port, which is
+  reported when the server is started (e.g.,
+  \code{Listening on http://localhost:54321}).
 
   The \code{tls.*} arguments apply to the HTTPS listeners and are
   recycled over them: each argument is either a single value used by all
