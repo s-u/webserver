@@ -387,10 +387,11 @@ static void process_request(client_connection_t *c)
 		WS13_upgrade(c, c->ws_key, c->ws_protocol, c->ws_version, c->aux->ws_connected);
 		/* the WS swtich messes up args since it replaces it with its own version so
 		   we can't go back to serving - just bail out (NOTE: only works when forked!)
-		   _exit(): don't run the parent's atexit handlers or stdio clean-up,
+		   don't run the parent's atexit handlers or stdio clean-up,
 		   but flush our own output */
-		fflush(NULL);
-		_exit(0);
+#ifndef WIN32
+		fork_child_exit(0);
+#endif
 	}
 #endif
 

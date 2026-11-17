@@ -166,6 +166,15 @@ ssize_t send_all(client_connection_t *c, const void *buf, size_t len, double tim
    returns 0 for the child */
 int prepare_child(client_connection_t *arg);
 
+#ifndef WIN32
+/* terminate a forked child process (use instead of _exit()/exit()):
+   flushes the child's own stdio output, then ends the process without
+   running atexit handlers or stdio clean-up inherited from the parent.
+   status is the intended exit status (currently not reported to the
+   parent, see server.c). Does not return. */
+void fork_child_exit(int status);
+#endif
+
 /* set blocking flag on a connection. Note that this should only
    be used by implementations of virtual servers, since real
    servers set the blocking behavior based on the SRV_NONBLOCK

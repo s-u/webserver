@@ -526,14 +526,6 @@ void r_ext_close(client_connection_t *c) {
     }
 }
 
-#ifndef WIN32
-/* SIGHUP is how the parent tells the worker to go away. Closing the
-   connection is not enough, because workers forked later inherit the
-   parent's end of it, so the worker may never see EOF. */
-static void sighandler(int sig) {
-    _exit(0);
-}
-#endif
 
 client_connection_t *r_ext_new_worker(void) {
 #ifdef WIN32
@@ -575,9 +567,17 @@ client_connection_t *r_ext_new_worker(void) {
 	c->info.s = ios[1];
 	c->info.srv = remote_server;
 #ifndef WIN32
+	/* SIGHUP is how the parent tells the worker to go away. Closing the
+	   connection is not enough, because workers forked later inherit the
+	   parent's end of it, so the worker may never see EOF.
+	   The default action of SIGHUP terminates the process without running
+	   any user-space code (same as the _exit() in a handler we used to have),
+	   we just have to make sure it is neither handled (R or the server
+	   may have set a handler in the parent), ignored (e.g. nohup) nor
+	   blocked (the mask is inherited from the forking thread). */
 	{
 	    sigset_t set;
-	    signal(SIGHUP, sighandler);
+	    signal(SIGHUP, SIG_DFL);
 	    sigemptyset(&set);
 	    sigaddset(&set, SIGHUP);
 	    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
@@ -592,13 +592,8 @@ client_connection_t *r_ext_new_worker(void) {
 	free(remote_server);
 	DBG(ulog_debug(" - child process %d terminating", (int) getpid()));
 	/* NOT exit(): that would run atexit handlers and stdio clean-up of the
-	   parent's state. In particular, it re-positions inherited input streams,
-	   which share the file offset with the parent, so e.g. Rscript would
-	   continue reading its script from the wrong place.
-	   Output buffered by the child itself is flushed explicitly (nothing
-	   is inherited since we flush before fork()). */
-	fflush(NULL);
-	_exit(0);
+	   parent's state - see fork_child_exit() for details. */
+	fork_child_exit(0);
     }
     /* parent */
     closesocket(ios[1]);

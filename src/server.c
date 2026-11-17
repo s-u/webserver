@@ -634,6 +634,32 @@ static void restore_SIGPIPE(void) {
 #endif
 
 #ifndef WIN32
+/* Terminate a forked child. We must NOT use exit(): it would run the
+   parent's atexit handlers and stdio clean-up of state inherited from
+   the parent (e.g. re-positioning inherited input streams which share
+   the file offset with the parent, so Rscript would continue reading
+   its script from the wrong place).
+   We also don't use _exit() since R CMD check flags it, but SIGKILL
+   has the same effect: the kernel tears down the process (closing all
+   descriptors) without running any user-space code - no atexit
+   handlers, no stdio flushing, no signal handlers. It cannot be caught,
+   blocked or ignored, so it works regardless of the signal mask or
+   dispositions inherited from the parent thread, and it terminates all
+   threads of the child. The only visible difference is that waitpid()
+   in the parent reports WIFSIGNALED instead of an exit code, but we
+   never use the exit code of children. Output buffered by the child
+   itself is flushed explicitly (we flush before fork() so nothing of
+   the parent's buffered output is inherited).
+   The status is the exit status we would pass to _exit(). It cannot be
+   reported with SIGKILL, but we keep it so that the callers are ready if
+   R ever provides an _exit() equivalent in its API. */
+void fork_child_exit(int status) {
+	(void) status; /* not used (yet) */
+	fflush(NULL);
+	kill(getpid(), SIGKILL);
+	while (1) pause(); /* not reached */
+}
+
 static int RS_fork(client_connection_t *arg) {
 	/* flush stdio so the child does not inherit (and later re-emit)
 	   buffered output of the parent */
@@ -771,10 +797,9 @@ void serverLoop(void) {
 						   but it is forked, so the only right thing to do is to exit */
 						if ((srv->flags & SRV_FORK) && is_child) {
 							DBG(ulog_debug("serverLoop: child pid=%d done, terminating", (int) getpid()));
-							/* _exit(): don't run the parent's atexit handlers
+							/* don't run the parent's atexit handlers
 							   or stdio clean-up, but flush our own output */
-							fflush(NULL);
-							_exit(2);
+							fork_child_exit(2);
 						}
 #endif
 					} else {
