@@ -4,6 +4,15 @@
 	header. Previously, paths with spaces, % or other special
 	characters resulted in an invalid location.
 
+   o	Forked R workers (fork=TRUE in addHandler()) no longer keep
+	client connections of the parent open. Previously, a client
+	could wait indefinitely for the end of a response without
+	Content-Length (such as the error response of a handler) if
+	the request was the first one served by a new worker.
+
+   o	Replaced _exit() with fork_child_exit() as work-around using
+	kill(self, SIGKILL) to avoid the R CMD check warning.
+
 
 1.0-0	2026-11-12
    o	webstart() accepts connections on one or more listeners
