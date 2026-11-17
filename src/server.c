@@ -531,6 +531,13 @@ void close_server_sockets_in_child(int keep) {
 		socklen_t ll = sizeof(la);
 		if (fd == keep || getsockname(fd, (struct sockaddr*) &la, &ll))
 			continue; /* not an open socket */
+		/* the listening sockets are closed last, because they are
+		   needed to match the sockets of the connections */
+		for (i = 0; i < servers; i++)
+			if (server[i] && server[i]->ss == fd)
+				break;
+		if (i < servers)
+			continue;
 		for (i = 0; i < servers; i++) {
 			struct sockaddr_storage sa;
 			socklen_t sl = sizeof(sa);
@@ -555,6 +562,9 @@ void close_server_sockets_in_child(int keep) {
 			}
 		}
 	}
+	for (i = 0; i < servers; i++)
+		if (server[i] && server[i]->ss != -1 && server[i]->ss != keep)
+			close(server[i]->ss);
 }
 #else
 void close_server_sockets_in_child(int keep) {}
